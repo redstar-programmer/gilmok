@@ -1,6 +1,7 @@
 # Gilmok — single static Go binary + docker CLI (to exec/restart Caddy/Authelia via the socket)
-# Multi-arch: the build stage runs on the builder's own platform (tests run once, natively) and
-# cross-compiles for each target (docker buildx --platform linux/amd64,linux/arm64).
+# Multi-arch: the build stage runs on the builder's own platform and cross-compiles for each target
+# (docker buildx --platform linux/amd64,linux/arm64). Tests are not run here by default — CI runs them
+# in its own job, in parallel (.github/workflows); add --build-arg RUN_TESTS=1 to test while building.
 
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 WORKDIR /src
@@ -9,7 +10,8 @@ RUN go mod download
 COPY *.go ./
 COPY web ./web
 COPY testdata ./testdata
-RUN go vet ./... && go test ./...
+ARG RUN_TESTS=0
+RUN if [ "$RUN_TESTS" = "1" ]; then go vet ./... && go test ./...; fi
 ARG TARGETOS=linux
 ARG TARGETARCH
 ARG VERSION=""
