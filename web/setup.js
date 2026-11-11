@@ -145,7 +145,7 @@ function foundText(det, kind) {
 }
 
 // checks that are not a problem to fix now (they fill in by themselves once traffic arrives)
-const SETUP_INFO_CHECKS = { 'crowdsec/acq': '요청이 들어오면 채워집니다 — 지금 고칠 것은 없습니다.' };
+const SETUP_INFO_CHECKS = {};
 
 /** Cloudflare token entry: reuse the Caddy container's token (never shown) or paste one. */
 function setupTokenFix(det, onDone) {

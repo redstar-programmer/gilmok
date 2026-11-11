@@ -47,6 +47,17 @@ func splitTopLevel(src string) ([]caddyBlock, error) {
 				continue
 			}
 			code := stripComment(trim)
+			// one-line block: `(snip) { header X-A 1 }` / `:80 { respond "hi" }`
+			if i := strings.Index(code, "{"); i > 0 && strings.HasSuffix(code, "}") && strings.Count(code, "{") == strings.Count(code, "}") {
+				inner := strings.TrimSpace(code[i+1 : len(code)-1])
+				b := caddyBlock{header: strings.TrimSpace(code[:i]), comments: pending}
+				if inner != "" {
+					b.body = []string{"\t" + inner}
+				}
+				blocks = append(blocks, b)
+				pending = nil
+				continue
+			}
 			if strings.HasSuffix(code, "{") {
 				cur = &caddyBlock{header: strings.TrimSpace(strings.TrimSuffix(code, "{")), comments: pending}
 				pending = nil

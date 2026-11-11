@@ -23,14 +23,15 @@ type TopoPort struct {
 }
 
 type TopoInfo struct {
-	CaddyRunning  bool       `json:"caddyRunning"`
-	Ports         []TopoPort `json:"ports"`      // Caddy's published ports (docker inspect)
-	PublicPort    int        `json:"publicPort"` // Caddy HTTPS port inside the container (https_port or 443)
-	DockerOS      string     `json:"dockerOs"`   // "Docker Desktop", "Ubuntu 24.04", …
-	DockerDesktop bool       `json:"dockerDesktop"`
-	PublicIP      string     `json:"publicIp"`
-	SelfName      string     `json:"selfName"`  // Gilmok's own container
-	SelfPorts     []TopoPort `json:"selfPorts"` // its published ports (direct admin access)
+	CaddyRunning  bool                  `json:"caddyRunning"`
+	Ports         []TopoPort            `json:"ports"`      // Caddy's published ports (docker inspect)
+	PublicPort    int                   `json:"publicPort"` // Caddy HTTPS port inside the container (https_port or 443)
+	DockerOS      string                `json:"dockerOs"`   // "Docker Desktop", "Ubuntu 24.04", …
+	DockerDesktop bool                  `json:"dockerDesktop"`
+	PublicIP      string                `json:"publicIp"`
+	SelfName      string                `json:"selfName"`  // Gilmok's own container
+	SelfPorts     []TopoPort            `json:"selfPorts"` // its published ports (direct admin access)
+	SvcNets       map[string]TopoSvcNet `json:"svcNets"`   // service id → Docker network of its upstream
 }
 
 type topoCache struct {
@@ -126,6 +127,10 @@ func (a *App) getTopology(w http.ResponseWriter, r *http.Request) {
 			a.topo.mu.Unlock()
 		}
 		pcancel()
+	}
+	info.SvcNets = map[string]TopoSvcNet{}
+	if caddyMode(st) == "docker" {
+		info.SvcNets = serviceNetworks(ctx, st, d.Services)
 	}
 	writeJSON(w, 200, info)
 }

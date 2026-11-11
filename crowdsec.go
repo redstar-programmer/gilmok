@@ -355,6 +355,13 @@ func (a *App) checkCrowdSec(ctx context.Context) CheckResult {
 		u.Hostname() != "localhost" && st.CrowdSecContainer != "" && !strings.EqualFold(u.Hostname(), st.CrowdSecContainer) {
 		r.add("lapi-match", "LAPI 주소 ↔ 컨테이너", "warn", fmt.Sprintf("LAPI 주소는 %s 를, CrowdSec 컨테이너 설정은 %s 를 가리킵니다 — 같은 컨테이너로 맞추세요 (아래 연결 설정)", u.Hostname(), st.CrowdSecContainer))
 	}
+	// sites whose access log CrowdSec reads: public + Proxied + mTLS (the real IP can be trusted only there)
+	mtlsSites := 0
+	for _, s := range d.Services {
+		if s.Enabled && !s.DNSOnly && s.Exposure == ExposurePublic && s.Proxied && s.MTLS {
+			mtlsSites++
+		}
+	}
 	if running && st.UseCaddy && st.UseCloudflare {
 		if out, err := ctrExec(st.CrowdSecContainer, nil, "cscli", "parsers", "list", "-o", "json"); err != nil {
 			r.add("parser", "길목 파서 (gilmok/caddy-logs)", "fail", oneLine(out))
@@ -367,8 +374,13 @@ func (a *App) checkCrowdSec(ctx context.Context) CheckResult {
 			r.add("acq", "Caddy 로그 수집", "warn", err.Error())
 		} else if v, ok := m.Acquisition["docker:"+st.CaddyContainer]; ok {
 			r.add("acq", "Caddy 로그 수집", "ok", fmt.Sprintf("읽음 %d줄 · 분석 %d줄", v["reads"], v["parsed"]))
+		} else if mtlsSites == 0 || !st.CrowdSecEnabled {
+			r.add("acq", "Caddy 로그 수집", "info", "아직 넘길 로그가 없습니다 — 아래 「mTLS 사이트 접근 로그」가 생기면 채워집니다")
+		} else if caddyHasRealIPLog(st.CaddyContainer) {
+			// Caddy wrote real-IP access lines, yet CrowdSec read none: the acquisition is pointed elsewhere
+			r.add("acq", "Caddy 로그 수집", "warn", fmt.Sprintf("Caddy(%s)에는 접근 로그가 있는데 CrowdSec이 읽지 못했습니다 — acquis 설정의 container_name 이 이 컨테이너인지 확인하세요", st.CaddyContainer))
 		} else {
-			r.add("acq", "Caddy 로그 수집", "warn", fmt.Sprintf("아직 docker:%s 에서 읽은 줄이 없습니다 — mTLS 사이트에 요청이 와야 보입니다 (acquis.yaml 의 container_name 확인)", st.CaddyContainer))
+			r.add("acq", "Caddy 로그 수집", "info", "아직 들어온 요청이 없습니다 — mTLS 사이트에 요청이 오면 채워집니다 (정상)")
 		}
 	}
 	if !st.UseCaddy || !st.UseCloudflare {
@@ -386,7 +398,7 @@ func (a *App) checkCrowdSec(ctx context.Context) CheckResult {
 	case !st.CrowdSecEnabled:
 		r.add("logging", "mTLS 사이트 접근 로그", "warn", "꺼져 있습니다 — 아래 설정에서 켜고 적용하세요")
 	case n == 0:
-		r.add("logging", "mTLS 사이트 접근 로그", "warn", "Proxied + mTLS 서비스가 없습니다 (DNS only은 실제 IP를 믿을 수 없어 제외)")
+		r.add("logging", "mTLS 사이트 접근 로그", "info", "CrowdSec이 분석할 사이트가 아직 없습니다. 길목은 실제 IP를 믿을 수 있는 「공개 · Proxied · mTLS」 서비스의 접근 로그만 넘깁니다 — 그런 서비스를 만들면 자동으로 포함됩니다 (지금 할 일은 없음)")
 	default:
 		r.add("logging", "mTLS 사이트 접근 로그", "ok", fmt.Sprintf("%d개 사이트 (적용 후 반영)", n))
 	}
@@ -396,10 +408,11 @@ func (a *App) checkCrowdSec(ctx context.Context) CheckResult {
 	switch {
 	case !st.CrowdSecSync:
 		r.add("sync", "Cloudflare 동기화", "skip", "꺼져 있음")
+	// sync problems are warnings: CrowdSec still judges and Gilmok shows it; only the edge block is missing
 	case !a.cf.Configured():
-		r.add("sync", "Cloudflare 동기화", "fail", "Cloudflare 토큰이 없습니다")
+		r.add("sync", "Cloudflare 동기화", "warn", "Cloudflare 토큰이 없습니다 — 판정·기록은 되지만 Cloudflare 엣지에서 차단하지는 않습니다")
 	case s.Error != "":
-		r.add("sync", "Cloudflare 동기화", "fail", s.Error)
+		r.add("sync", "Cloudflare 동기화", "warn", s.Error+" — 판정·기록은 되지만 Cloudflare 엣지 차단은 멈춰 있습니다")
 	case !s.LastPush.IsZero():
 		r.add("sync", "Cloudflare 동기화", "ok", fmt.Sprintf("목록 %d건 · %s", s.Pushed, s.LastPush.Format("01-02 15:04:05")))
 	default:
@@ -407,6 +420,17 @@ func (a *App) checkCrowdSec(ctx context.Context) CheckResult {
 	}
 	r.finish()
 	return r
+}
+
+// caddyHasRealIPLog: Caddy's recent output has an access line carrying gm_real_ip (an mTLS site was hit).
+func caddyHasRealIPLog(ctr string) bool {
+	if ctr == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	out, err := docker(ctx, nil, nil, "logs", "--tail", "2000", ctr)
+	return err == nil && strings.Contains(out, "gm_real_ip")
 }
 
 // csKeyUIPath: a bouncer key Gilmok created itself (설정 마법사 / 빠른 설정) — used when the

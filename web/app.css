@@ -827,6 +827,7 @@ select.ctr-picker { margin-top: 6px; font-size: 12.5px; color: var(--fg-2); }
 .ccard.warn { border-left: 3px solid rgba(251, 191, 36, .8); background: rgba(251, 191, 36, .05); }
 .ccard.fail { border-left: 3px solid rgba(248, 113, 113, .85); background: rgba(248, 113, 113, .07); }
 .ccard.skip { border-left: 3px solid var(--line-2); opacity: .8; }
+.ccard.info { border-left: 3px solid var(--line-2); }
 .cc-top { display: flex; align-items: center; gap: 7px; font-size: 13px; }
 .cc-top .chk-mark { flex: none; }
 .cc-detail { font-size: 12px; color: var(--fg-2); font-variant-numeric: tabular-nums; line-height: 1.45; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-all; }
@@ -1238,3 +1239,16 @@ html:not([lang="ko"]) .brand-en { display: none; }
 .fp-item:hover, .fp-item:focus-visible { background: rgb(var(--ink) / .06); outline: none; }
 .fp-item.dir { color: var(--accent); }
 .fp-file { display: flex; justify-content: space-between; gap: 12px; }
+/* small two-way switch (topology grouping) */
+.seg-mini { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--glass-2); }
+.seg-mini > span { padding: 0 6px; }
+.seg-mini > button { border: 0; background: transparent; color: var(--fg-2); font: inherit; font-size: 12px; padding: 3px 9px; border-radius: 7px; cursor: pointer; }
+.seg-mini > button.on { background: rgb(var(--ink) / .1); color: var(--fg-strong); }
+.seg-mini > button:disabled { opacity: .45; cursor: not-allowed; }
+.seg-mini > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* 「열기」 links next to a service name */
+.open-links { display: inline-flex; gap: 4px; }
+.open-link { display: inline-block; padding: 0 6px; border-radius: 6px; border: 1px solid var(--line); font-size: 11px; line-height: 18px; color: var(--fg-2); text-decoration: none; }
+.open-link:hover, .open-link:focus-visible { color: var(--accent); border-color: var(--accent); }
+.open-link.local { font-family: var(--mono); }
+.row.tight { gap: 6px; flex-wrap: wrap; }

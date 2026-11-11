@@ -34,7 +34,7 @@ func (r *CheckResult) add(id, label, status, detail string) {
 }
 
 func (r *CheckResult) finish() {
-	rank := map[string]int{"skip": 0, "ok": 1, "warn": 2, "fail": 3}
+	rank := map[string]int{"skip": 0, "info": 0, "ok": 1, "warn": 2, "fail": 3} // info: nothing to do
 	r.Status = "ok"
 	for _, c := range r.Checks {
 		if rank[c.Status] > rank[r.Status] {

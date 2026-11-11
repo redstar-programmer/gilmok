@@ -31,6 +31,7 @@ const TOPO_ICONS = {
   lb: ['M4 4h16v6H4z', 'M8 7h.01', 'M12 10v3', 'M5 20v-3h14v3', 'M12 13v7', 'M5 17h14'],
   bolt: ['M13 2L4.5 13.5H11L10 22l8.5-11.5H12z'],
   steps: ['M4 6h.01M4 12h.01M4 18h.01', 'M8 6h12M8 12h12M8 18h8'],
+  network: ['M4 4h5v5H4z', 'M15 4h5v5h-5z', 'M9.5 15h5v5h-5z', 'M6.5 9v3h11V9', 'M12 12v3'],
   gilmok: ['M12 2.5v19', 'M12 5h7l2.2 2.5L19 10h-7', 'M12 12.5H5l-2.2 2.5L5 17.5h7', 'M9 21.5h6'],
 };
 
@@ -152,7 +153,20 @@ const clip = (s, n) => {
   return x.length > m ? `${x.slice(0, m - 1)}…` : x;
 };
 
+/** grouping of the service column: by how it is exposed (default) or by the Docker network of its upstream */
+const topoGroupMode = () => { try { return localStorage.getItem('gm.topoGroup') === 'net' ? 'net' : 'expo'; } catch { return 'expo'; } };
+
 function topologyView(onOpen, info, onEdit) {
+  const holder = h('div');
+  const paint = () => holder.replaceChildren(topologyViewOf(onOpen, info, onEdit, topoGroupMode(), (m) => {
+    try { localStorage.setItem('gm.topoGroup', m); } catch { /* private mode */ }
+    paint();
+  }));
+  paint();
+  return holder;
+}
+
+function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
   const st = S.state;
   const set0 = settings();
   // components not in use are drawn as if their options were off
@@ -176,6 +190,29 @@ function topologyView(onOpen, info, onEdit) {
   ].map((g) => ({ ...g, items: all.filter(g.test).sort((a, b) => (b.enabled - a.enabled) || a.subdomain.localeCompare(b.subdomain)) }))
     .filter((g) => g.items.length);
   const M = topoModel(info, set, GROUPS);
+  // what is drawn in the group column: the exposure groups, or one group per Docker network
+  const expoOf = (s) => GROUPS.find((g) => g.items.includes(s)) || GROUPS[0];
+  const nets = (info && info.svcNets) || {};
+  const netMode = mode === 'net' && Object.keys(nets).length > 0;
+  const DRAW = !netMode ? GROUPS : (() => {
+    const by = new Map();
+    for (const s0 of GROUPS.flatMap((g) => g.items)) {
+      const n = nets[s0.id] || { kind: s0.dnsOnly ? 'dns' : 'other' };
+      const key = n.kind === 'network' ? `net:${n.network}` : n.kind;
+      if (!by.has(key)) {
+        const meta = n.kind === 'network'
+          ? { label: n.network, sub: n.shared ? 'Docker 망 · Caddy 연결' : 'Caddy가 없는 망', icon: 'network', color: n.shared ? TC.accent : TC.warn }
+          : n.kind === 'host' ? { label: '호스트', sub: '호스트 게시 포트', icon: 'host', color: TC.blue }
+            : n.kind === 'dns' ? { label: 'DNS 레코드만', sub: 'Caddy 사이트 없음', icon: 'dns', color: TC.gray }
+              : { label: '컨테이너 밖', sub: '외부 주소·모르는 이름', icon: 'globe', color: TC.gray };
+        by.set(key, { id: key, ...meta, items: [] });
+      }
+      by.get(key).items.push(s0);
+    }
+    const order = (g) => (g.id.startsWith('net:') ? 0 : g.id === 'host' ? 1 : g.id === 'other' ? 2 : 3);
+    return [...by.values()].sort((a, b) => order(a) - order(b) || a.label.localeCompare(b.label))
+      .map((g) => ({ ...g, items: g.items.sort((a, b) => GROUPS.indexOf(expoOf(a)) - GROUPS.indexOf(expoOf(b)) || a.subdomain.localeCompare(b.subdomain)) }));
+  })();
 
   // ---- geometry
   // columns: outside (internet / tailnet devices, Cloudflare, the front device) → this host
@@ -187,7 +224,7 @@ function topologyView(onOpen, info, onEdit) {
   const CADDY_HEAD = 74, SOCK = 38;
   let y = 0;
   const leafPos = new Map();
-  for (const g of GROUPS) {
+  for (const g of DRAW) {
     const ys = g.items.map((s) => { const yy = y; leafPos.set(s.id, yy); y += ROW; return yy; });
     g.y = (ys[0] + ys[ys.length - 1]) / 2;
     y += GAP;
@@ -197,8 +234,12 @@ function topologyView(onOpen, info, onEdit) {
   const orangeGroups = pub.filter((g) => g.id !== 'gray');
   const grayGroup = pub.find((g) => g.id === 'gray');
   const mean = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
-  const pin443 = pub.length ? mean(pub.map((g) => g.y)) : null;
-  const pin8443 = ts ? ts.y : null;
+  // listener sockets sit beside the groups they feed (by network: groups holding public / private sites)
+  const pubYs = DRAW.filter((g) => g.items.some((s) => s.exposure === 'public')).map((g) => g.y);
+  const tsYs = DRAW.filter((g) => g.items.some((s) => s.exposure !== 'public')).map((g) => g.y);
+  const pin443 = pub.length && pubYs.length ? mean(pubYs) : null;
+  let pin8443 = ts && tsYs.length ? mean(tsYs) : null;
+  if (netMode && pin443 != null && pin8443 != null && Math.abs(pin8443 - pin443) < 70) pin8443 = pin443 + 70;
   const cfY = pin443 != null ? pin443 - (grayGroup ? 70 : 0) : null;
   const directY = pin443 != null ? pin443 + 70 : null;
 
@@ -465,15 +506,23 @@ function topologyView(onOpen, info, onEdit) {
   }
 
   // ---- groups + leaves
-  for (const g of GROUPS) {
+  for (const g of DRAW) {
     const gy = Y(g.y);
-    const pinY = Y(g.id === 'ts' ? pin8443 : pin443);
     node(X.group, gy, GW, GH, { title: `${g.label} (${g.items.length})`, sub: g.sub, iconName: g.icon, color: g.color, list: g.items });
-    edge(X.caddy + CW, pinY, X.group, gy, g.color, g.items);
+    if (!netMode) {
+      edge(X.caddy + CW, Y(g.id === 'ts' ? pin8443 : pin443), X.group, gy, g.color, g.items);
+    } else {
+      // a network group can hold public and private sites: one line from each listener it serves
+      const pubIn = g.items.filter((s) => s.exposure === 'public');
+      const tsIn = g.items.filter((s) => s.exposure !== 'public');
+      if (pubIn.length) edge(X.caddy + CW, Y(pin443), X.group, gy - (tsIn.length ? 6 : 0), TC.blue, pubIn);
+      if (tsIn.length) edge(X.caddy + CW, Y(pin8443), X.group, gy + (pubIn.length ? 6 : 0), TC.ts, tsIn);
+    }
     for (const s of g.items) {
       const ly = Y(leafPos.get(s.id));
       const prot = !s.dnsOnly && s.authelia && s.authelia.enabled;
-      edge(X.group + GW, gy, X.leaf, ly, g.color, [s], { dashed: s.dnsOnly, static: !alive(s) });
+      const lc = netMode ? expoOf(s).color : g.color; // the leaf keeps its exposure color
+      edge(X.group + GW, gy, X.leaf, ly, lc, [s], { dashed: s.dnsOnly, static: !alive(s) });
       if (prot) {
         const gx = X.leaf - 40;
         gLabels.append(sv('g', { class: `gate k-${s.id}`, transform: `translate(${gx} ${ly})` },
@@ -486,10 +535,10 @@ function topologyView(onOpen, info, onEdit) {
         'aria-label': `${fqdn(s.subdomain)} 편집${s.enabled ? '' : ' (중지됨)'}`, 'data-key': `k-${s.id}`,
       },
       sv('title', null, `${fqdn(s.subdomain)}${s.upstream ? ` → ${s.upstream}` : ''}${healthOf(s) ? `\n${healthOf(s).text} — ${healthOf(s).title}` : ''}${s.notes ? `\n${s.notes}` : ''}`),
-      sv('rect', { class: 'node-bg', width: LW, height: LH, rx: 13, stroke: (healthOf(s) || {}).st === 'down' ? TC.danger : g.color, 'stroke-opacity': (healthOf(s) || {}).st === 'down' ? 0.95 : null }),
+      sv('rect', { class: 'node-bg', width: LW, height: LH, rx: 13, stroke: (healthOf(s) || {}).st === 'down' ? TC.danger : lc, 'stroke-opacity': (healthOf(s) || {}).st === 'down' ? 0.95 : null }),
       sv('rect', { class: 'node-shine', x: 1, y: 1, width: LW - 2, height: LH / 2, rx: 12 }),
-      sv('circle', { cx: 27, cy: LH / 2, r: 17, fill: `url(#gr-${colorKey(g.color)})`, 'fill-opacity': 0.2, stroke: g.color, 'stroke-opacity': 0.55 }),
-      topoIcon(serviceIcon(s), 27, LH / 2, 19, g.color),
+      sv('circle', { cx: 27, cy: LH / 2, r: 17, fill: `url(#gr-${colorKey(lc)})`, 'fill-opacity': 0.2, stroke: lc, 'stroke-opacity': 0.55 }),
+      topoIcon(serviceIcon(s), 27, LH / 2, 19, lc),
       (() => {
         const hx = healthOf(s);
         if (!hx) return null;
@@ -644,7 +693,21 @@ function topologyView(onOpen, info, onEdit) {
 
   // ---- summary + legend
   const en = all.filter((s) => s.enabled);
+  const modeSel = (() => {
+    const wrap = h('div', { class: 'seg-mini', role: 'radiogroup', 'aria-label': '서비스 묶기' });
+    const opt = (v, label, title) => {
+      const b = h('button', { type: 'button', role: 'radio', 'aria-checked': String(mode === v), class: mode === v ? 'on' : '', title }, label);
+      b.addEventListener('click', () => { if (mode !== v) setMode(v); });
+      return b;
+    };
+    const hasNets = Object.keys(nets).length > 0;
+    const netBtn = opt('net', 'Docker 네트워크', hasNets ? '대상 컨테이너가 붙어 있는 Docker 네트워크별로 묶습니다' : 'Caddy가 Docker일 때만 쓸 수 있습니다 (네트워크 정보를 읽지 못함)');
+    netBtn.disabled = !hasNets;
+    wrap.append(h('span', { class: 'small muted' }, '묶기'), opt('expo', '공개 방식', '공개(Proxied·DNS only)·사설로 묶습니다'), netBtn);
+    return wrap;
+  })();
   const sum = h('div', { class: 'topo-sum' },
+    modeSel,
     h('span', { class: 'badge' }, `서비스 ${en.length}/${all.length}`),
     (() => { const hs = all.map(healthOf).filter(Boolean); const down = hs.filter((x) => x.st === 'down').length; return hs.length ? h('span', { class: `badge ${down ? 'danger' : 'ok'}` }, down ? `✗ 응답 없음 ${down}` : `● 모두 정상 ${hs.length}`) : null; })(),
     h('span', { class: 'badge public' }, `공개 ${en.filter((s) => s.exposure === 'public').length}`),

@@ -1071,6 +1071,7 @@ function serviceTable() {
 
   const tbody = h('tbody');
   let group = '';
+  const localSlots = [];
   for (const s of list) {
     const g = s.exposure === 'public' ? '공개 서비스 · :443' : `${privName()} · :${settings().tailscalePort || 8443}`;
     if (g !== group) {
@@ -1086,7 +1087,7 @@ function serviceTable() {
     boxes.push([cb, s.id]);
     const tr = h('tr', { class: `clickable ${s.enabled ? '' : 'disabled'} ${picked.has(s.id) ? 'picked' : ''}` },
       h('td', { class: 'sel-cell' }, cb),
-      h('td', null, h('div', { class: 'cell-main' }, open, s.notes ? h('span', { class: 'cell-sub', title: s.notes }, s.notes) : null)),
+      h('td', null, h('div', { class: 'cell-main' }, h('div', { class: 'row tight' }, open, openLinks(s, localSlots)), s.notes ? h('span', { class: 'cell-sub', title: s.notes }, s.notes) : null)),
       !use('caddy') ? null : h('td', { class: 'mono' }, s.dnsOnly ? h('span', { class: 'dash' }, 'DNS만') : (s.upstream || h('span', { class: 'dash', title: '추가 지시어로 처리' }, '(사용자 지시어)'))),
       h('td', null, s.exposure === 'public' ? h('span', { class: 'badge public' }, '공개') : h('span', { class: 'badge ts' }, use('tailscale') ? 'Tailscale' : '사설')),
       use('cloudflare') ? h('td', null, cloudCell(s)) : null,
@@ -1098,6 +1099,7 @@ function serviceTable() {
   }
   const note = S.dnsErr ? h('p', { class: 'hint', style: { padding: '8px 12px' } }, `DNS 상태를 불러오지 못했습니다: ${S.dnsErr}`) : null;
   updSel();
+  fillLocalLinks(localSlots);
   return h('div', null,
     canEdit ? selBar : null,
     h('table', null,
@@ -1105,6 +1107,33 @@ function serviceTable() {
       h('thead', null, h('tr', null, h('th', { scope: 'col', class: 'sel-cell' }, allCb), ['서브도메인', use('caddy') ? '대상' : null, '노출', use('cloudflare') ? '구름' : null, use('caddy') || use('cloudflare') ? '보안' : null, use('authelia') ? 'Authelia' : null, '상태 (연결)'].filter(Boolean).map((t) => h('th', { scope: 'col' }, t)))),
       tbody),
     note);
+}
+
+// 「열기」 links of a service: its site address, and — when the page is opened on the server itself —
+// the upstream's host-published port (straight to the app, without Caddy / Authelia)
+const onServerItself = () => /^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|\d+\.\d+\.\d+\.\d+)$/.test(location.hostname);
+function openLinks(s, slots) {
+  const box = h('span', { class: 'open-links' });
+  if (!s.enabled || s.dnsOnly || !settings().domain) return box;
+  const a = h('a', { href: `https://${fqdn(s.subdomain)}`, target: '_blank', rel: 'noopener noreferrer', class: 'open-link', title: `${fqdn(s.subdomain)} 열기 (새 창)`, 'aria-label': `${fqdn(s.subdomain)} 열기` }, '↗');
+  a.addEventListener('click', (e) => e.stopPropagation());
+  box.append(a);
+  slots.push([box, s]);
+  return box;
+}
+async function fillLocalLinks(slots) {
+  if (!slots.length || !onServerItself()) return;
+  if (!S.svcLocal || Date.now() - S.svcLocal.at > 60000) {
+    try { S.svcLocal = { at: Date.now(), map: await api('GET', '/api/services/local') }; } catch { return; }
+  }
+  for (const [box, s] of slots) {
+    const v = S.svcLocal.map[s.id];
+    if (!v || !v.localPort || !box.isConnected) continue;
+    const url = `${v.localTls ? 'https' : 'http'}://${location.hostname}:${v.localPort}`;
+    const a = h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', class: 'open-link local', title: `이 서버에서 바로 열기 — ${url} (Caddy·Authelia를 거치지 않음)` }, `:${v.localPort}`);
+    a.addEventListener('click', (e) => e.stopPropagation());
+    box.append(a);
+  }
 }
 
 function knownGroups() {
@@ -1744,7 +1773,7 @@ function stepsLayout(panel, { title, lead, steps }) {
 
 // ---- connection checks (/api/check/{target})
 
-const CHECK_MARK = { ok: ['✓', '통과'], warn: ['!', '주의'], fail: ['✗', '실패'], skip: ['–', '건너뜀'] };
+const CHECK_MARK = { ok: ['✓', '통과'], warn: ['!', '주의'], fail: ['✗', '실패'], skip: ['–', '건너뜀'], info: ['i', '참고'] };
 
 async function loadCheck(target, force = false) {
   S.checks = S.checks || {};

@@ -245,3 +245,138 @@ func uniqStrings(in []string) []string {
 	}
 	return out
 }
+
+// TopoSvcNet: where a service's upstream lives, for grouping the topology by Docker network.
+type TopoSvcNet struct {
+	Kind      string `json:"kind"`                // network | host | other
+	Network   string `json:"network,omitempty"`   // Docker network (kind network)
+	Container string `json:"container,omitempty"` // the upstream container
+	Shared    bool   `json:"shared,omitempty"`    // Caddy is on that network too
+	// LocalPort: the upstream port as published on the host — the service's own page can be opened
+	// directly from this machine (http(s)://localhost:<port>) without going through Caddy
+	LocalPort int  `json:"localPort,omitempty"`
+	LocalTLS  bool `json:"localTls,omitempty"`
+}
+
+// upstreamPort: "app:8080" → 8080, "https://app" → 443, "app" → 80.
+func upstreamPort(u string) (int, bool) {
+	u = strings.TrimSpace(u)
+	tls := strings.HasPrefix(u, "https://")
+	for _, p := range []string{"http://", "https://", "h2c://"} {
+		u = strings.TrimPrefix(u, p)
+	}
+	if i := strings.IndexAny(u, "/ "); i >= 0 {
+		u = u[:i]
+	}
+	if i := strings.LastIndexByte(u, ':'); i >= 0 {
+		if n, err := strconv.Atoi(u[i+1:]); err == nil {
+			return n, tls
+		}
+	}
+	if tls {
+		return 443, true
+	}
+	return 80, false
+}
+
+// serviceNetworks maps each service id to the Docker network its upstream container is on
+// (preferring a network Caddy shares). One `docker ps` + `docker inspect` for all.
+func serviceNetworks(ctx context.Context, st Settings, svcs []*Service) map[string]TopoSvcNet {
+	out := map[string]TopoSvcNet{}
+	ids, err := docker(ctx, nil, nil, "ps", "-aq")
+	if err != nil || strings.TrimSpace(ids) == "" {
+		return out
+	}
+	raw, err := docker(ctx, nil, nil, append([]string{"inspect"}, strings.Fields(ids)...)...)
+	if err != nil {
+		return out
+	}
+	var list []inspectCtr
+	if json.Unmarshal([]byte(raw), &list) != nil {
+		return out
+	}
+	byName := map[string]*inspectCtr{}
+	var caddyNets map[string]bool
+	for i := range list {
+		c := &list[i]
+		name := strings.TrimPrefix(c.Name, "/")
+		byName[strings.ToLower(name)] = c
+		if svc := c.Config.Labels["com.docker.compose.service"]; svc != "" {
+			if _, dup := byName[strings.ToLower(svc)]; !dup {
+				byName[strings.ToLower(svc)] = c
+			}
+		}
+		if name == st.CaddyContainer {
+			caddyNets = map[string]bool{}
+			for n := range c.NetworkSettings.Networks {
+				caddyNets[n] = true
+			}
+		}
+	}
+	for _, s := range svcs {
+		if s.DNSOnly || s.Upstream == "" {
+			continue
+		}
+		host := strings.ToLower(upstreamHost(s.Upstream))
+		switch {
+		case host == "host.docker.internal" || host == "localhost" || strings.HasPrefix(host, "127.") || host == "[::1]":
+			port, tls := upstreamPort(s.Upstream)
+			out[s.ID] = TopoSvcNet{Kind: "host", LocalPort: port, LocalTLS: tls}
+			continue
+		}
+		c := byName[host]
+		if c == nil {
+			out[s.ID] = TopoSvcNet{Kind: "other"}
+			continue
+		}
+		var nets, shared []string
+		for n := range c.NetworkSettings.Networks {
+			nets = append(nets, n)
+			if caddyNets[n] {
+				shared = append(shared, n)
+			}
+		}
+		sort.Strings(nets)
+		sort.Strings(shared)
+		v := TopoSvcNet{Kind: "network", Container: strings.TrimPrefix(c.Name, "/")}
+		if port, tls := upstreamPort(s.Upstream); port > 0 {
+			for _, b := range c.NetworkSettings.Ports[strconv.Itoa(port)+"/tcp"] {
+				if hp, err := strconv.Atoi(b.HostPort); err == nil && hp > 0 {
+					v.LocalPort, v.LocalTLS = hp, tls
+					break
+				}
+			}
+		}
+		switch {
+		case len(shared) > 0:
+			v.Network, v.Shared = shared[0], true
+		case len(nets) > 0:
+			v.Network = nets[0]
+		default:
+			v.Kind = "other"
+		}
+		out[s.ID] = v
+	}
+	return out
+}
+
+// GET /api/services/local — per service: the Docker network of its upstream and the host port it is
+// published on (for 「로컬에서 열기」). Read-only.
+func (a *App) getServicesLocal(w http.ResponseWriter, r *http.Request) {
+	d := a.store.Snapshot()
+	out := map[string]TopoSvcNet{}
+	if caddyMode(d.Settings) == "docker" {
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		out = serviceNetworks(ctx, d.Settings, d.Services)
+	} else {
+		// Caddy on the host: localhost:<port> upstreams are the local address already
+		for _, s := range d.Services {
+			if h := strings.ToLower(upstreamHost(s.Upstream)); !s.DNSOnly && (h == "localhost" || strings.HasPrefix(h, "127.")) {
+				port, tls := upstreamPort(s.Upstream)
+				out[s.ID] = TopoSvcNet{Kind: "host", LocalPort: port, LocalTLS: tls}
+			}
+		}
+	}
+	writeJSON(w, 200, out)
+}

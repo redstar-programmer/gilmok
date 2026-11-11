@@ -27,7 +27,7 @@ import (
 //go:embed web
 var webFS embed.FS
 
-var version = "0.1.2"
+var version = "0.1.3"
 
 func main() {
 	dataDir := env("GM_DATA", "/data")
@@ -102,9 +102,12 @@ func (app *App) handler() http.Handler {
 	api.HandleFunc("PUT /api/groups/{name}", app.putGroup)
 	api.HandleFunc("DELETE /api/groups/{name}", app.deleteGroup)
 	api.HandleFunc("GET /api/services/export.xlsx", app.getServicesExport)
+	api.HandleFunc("GET /api/services/local", app.getServicesLocal)
 	api.HandleFunc("PUT /api/settings", app.saveSettings) // step-up checked inside for security fields
 	api.HandleFunc("POST /api/import", S(app.importExisting))
 	api.HandleFunc("GET /api/fs/browse", app.getFSBrowse)
+	api.HandleFunc("POST /api/import/sites", app.postImportSites)
+	api.HandleFunc("POST /api/import/sites/apply", app.postImportSitesApply)
 	api.HandleFunc("GET /api/plan", app.getPlan)
 	api.HandleFunc("POST /api/apply", S(app.postApply))
 	api.HandleFunc("GET /api/dns", app.getDNS)
