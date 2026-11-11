@@ -734,4 +734,11 @@ go test -count=1 -run 'Groups|Bulk' ./...   # 일부
 | THEME-02 | 다크 회귀 | 같은 화면 | 예전과 같음, 실행 중 전환 시 구성도 다시 그림 | P2 | ✅ 수동 확인 (2026-11-11) |
 | THEME-03 | 시스템 | OS 다크 / OS 라이트 규칙 | 다크 / `@media (prefers-color-scheme: light)` 규칙이 화이트와 같은 값 | P2 | ✅ 수동 확인 (OS 라이트 전환 자체는 미시험) |
 | THEME-04 | 브라우저 확장 | Dark Reader 켜짐 + 화이트 | `darkreader-lock`으로 원래 색 유지 | P3 | ✅ 수동 확인 |
+| I18N-01 | 번역 파일 무결성 | en.json | JSON 형식, 자리표시자가 원문과 같음, ko.json에 없는 키 없음 | P1 | ✅ `TestI18nCatalog` |
+| I18N-02 | 영어 화면 전체 | 모든 탭·단계·하위 단계·적용 창 | `gm.i18nDebug=1`로 돌며 `gmI18n.misses()` — 사용자 데이터 외 0건, 구성도 칸 겹침 없음 | P2 | ✅ 수동 (2026-11-11) |
+| I18N-03 | 한국어로 되돌림 | 언어 select → 한국어 | 새로고침 후 원문 그대로 (번역 처리 안 돔) | P2 | ✅ 수동 |
+| I18N-04 | 짧은 패턴 오매칭 | 「모든 사이트에 공통인 부분」 | 「{0}분」에 걸리지 않음 (node로 번역기 단독 실행) | P2 | ✅ 수동 |
+| I18N-05 | 첫 접속 언어 선택 | Lang 비어 있음 → `POST /api/auth/lang` | 인증 없이 1회만(이후 409), 잘못된 값 400, state에 lang, 설정에서 변경·잘못된 값 거부 | P1 | ✅ `TestUILanguageChoice` |
+| I18N-06 | 언어 선택 화면 → 다른 브라우저 | 새 설치 접속 → English → 캐시 지운 브라우저 → 설정 탭에서 한국어 | 선택 화면, 영어 로그인, 다른 브라우저도 영어, 설정 저장 후 한국어로 새로고침 | P2 | ✅ 수동 (2026-11-11) |
+| REL-01 | 멀티 아키텍처 이미지 빌드 | `docker buildx build --platform linux/amd64 --build-arg VERSION=…` | go vet·test 통과, 라벨 version, TZ=UTC | P2 | ✅ 수동 |
 

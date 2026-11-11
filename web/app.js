@@ -72,7 +72,7 @@ const fmtTime = (iso) => {
   if (!iso || iso.startsWith('0001-')) return '';
   const d = new Date(iso);
   if (isNaN(d)) return iso;
-  return d.toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleString(gmLocale(), { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 };
 const splitList = (s) => String(s || '').split(/[,\s]+/).map((x) => x.trim()).filter(Boolean);
 
@@ -406,7 +406,8 @@ function diffStat(ops) {
 }
 
 function renderDiff(ops, ctx = 3) {
-  const box = h('div', { class: 'diff', role: 'region', 'aria-label': '변경 내용 비교', tabindex: '0' });
+  // file contents: never translated (i18n.js skips translate="no")
+  const box = h('div', { class: 'diff', role: 'region', 'aria-label': '변경 내용 비교', tabindex: '0', translate: 'no' });
   const keep = new Uint8Array(ops.length);
   ops.forEach((o, i) => {
     if (o.t !== '=') for (let k = Math.max(0, i - ctx); k <= Math.min(ops.length - 1, i + ctx); k++) keep[k] = 1;
@@ -643,7 +644,7 @@ function renderTopbar() {
   const disk = st.disk || {};
   if (disk.level && disk.level !== 'ok') {
     const txt = { warn: '디스크 여유 부족', critical: '디스크 여유 매우 부족', stop: '디스크 위험 — 요청 로그 중단' }[disk.level];
-    const b = h('button', { type: 'button', class: `top-pill ${disk.level}`, title: `여유 ${(disk.freePct || 0).toFixed(1)}% — 로그 탭에서 정리하세요` }, `${disk.level === 'warn' ? '!' : '✗'} ${txt} ${(disk.freePct || 0).toFixed(0)}%`);
+    const b = h('button', { type: 'button', class: `top-pill ${disk.level}`, title: `여유 ${(disk.freePct || 0).toFixed(1)}% — 로그 탭에서 정리하세요` }, `${disk.level === 'warn' ? '!' : '✗'} `, txt, ` ${(disk.freePct || 0).toFixed(0)}%`); // separate text nodes: txt is translated on its own (i18n.js)
     b.addEventListener('click', () => gotoTab('logs'));
     area.append(b);
   }
@@ -737,6 +738,37 @@ function renderPanel() {
   S.usersRedraw = null;
   const r = { dashboard: renderDashboard, services: renderServices, caddy: renderCaddy, authelia: renderAuthelia, cloudflare: renderCloudflare, crowdsec: renderCrowdSec, logs: renderLogs, gilmok: renderGilmok }[S.tab];
   r(panel);
+}
+
+/**
+ * First visit of a new install: choose the UI language before anything else (bilingual, never
+ * translated). The choice becomes the install's language (Settings.lang) for every user.
+ */
+function showLangChooser() {
+  $('#app').hidden = true;
+  $('#auth').hidden = false;
+  $('#auth-form').hidden = true;
+  const pick = async (v, btn) => {
+    try {
+      await busy(btn, () => api('POST', '/api/auth/lang', { lang: v }));
+    } catch { /* already chosen elsewhere: the reload below follows the server */ }
+    if (!gmI18n.sync(v)) location.reload();
+  };
+  const opt = (v, name, hint) => {
+    const b = h('button', { type: 'button', class: 'lang-card', lang: v }, h('b', null, name), h('small', null, hint));
+    b.addEventListener('click', () => pick(v, b));
+    return b;
+  };
+  const card = h('div', { class: 'glass auth-card lang-choose', id: 'lang-choose', translate: 'no', role: 'group', 'aria-labelledby': 'lang-choose-h' },
+    h('div', { class: 'brand brand-lg' }, h('span', { class: 'logo', 'aria-hidden': 'true' }), h('span', null, '길목'), ' ', h('span', { class: 'brand-en' }, 'Gilmok')),
+    h('h1', { id: 'lang-choose-h' }, '언어를 선택하세요 · Choose your language'),
+    h('div', { class: 'lang-cards' },
+      opt('ko', '한국어', '이 설치의 모든 화면을 한국어로'),
+      opt('en', 'English', 'Show every screen of this install in English')),
+    h('p', { class: 'muted small' }, '나중에 설정 탭에서 바꿀 수 있습니다 · You can change it later in the Settings tab'));
+  const old = $('#lang-choose');
+  if (old) old.replaceWith(card); else $('#auth').append(card);
+  card.querySelector('.lang-card').focus();
 }
 
 function initShell() {
@@ -3005,7 +3037,8 @@ function renderGilmok(panel) {
       ? callout('warn', h('b', null, `저장됐지만 아직 적용하지 않은 변경 ${pend.length}건`), pend.length ? h('ul', null, pend.map((p) => h('li', null, p))) : null)
       : callout('ok', `모든 변경이 적용되어 있습니다${fmtTime(st.lastApplied) ? ` · 마지막 적용 ${fmtTime(st.lastApplied)}` : ''}`),
         h('ol', { class: 'flow' }, [`검증 (실제 ${['Caddy', 'Authelia'].filter((n) => use(n.toLowerCase())).join('·') || '구성요소'}로)`, '백업 (/data/backups)', use('authelia') ? 'Authelia 쓰기 → 재시작 → 시작 로그 확인' : null, use('caddy') ? 'Caddy 쓰기 → 무중단 reload' : null, use('cloudflare') ? 'Cloudflare DNS 동기화' : null].filter(Boolean).map((t) => h('li', null, t))),
-    h('p', { class: 'hint' }, `어느 단계든 실패하면 ${['Caddy', 'Authelia'].filter((n) => use(n.toLowerCase())).join('·') || '바꾼 파일'}${use('caddy') && use('authelia') ? '를 모두' : '을(를)'} 이전 파일로 되돌립니다.`),
+    h('p', { class: 'hint' }, use('caddy') && use('authelia') ? '어느 단계든 실패하면 Caddy·Authelia를 모두 이전 파일로 되돌립니다.'
+      : `어느 단계든 실패하면 ${['Caddy', 'Authelia'].find((n) => use(n.toLowerCase())) || '바꾼 파일'}을(를) 이전 파일로 되돌립니다.`),
     h('div', { class: 'row' }, applyBig));
 
   // 4) backups
@@ -3096,6 +3129,11 @@ function renderGilmok(panel) {
     ] },
     { ...securityStep(), aside: true },
   ].filter(Boolean);
+  steps.push({ id: 'lang', title: '화면 언어', aside: true, desc: '이 설치의 모든 사용자에게 보이는 화면 언어입니다. 바꾸면 화면을 다시 불러옵니다.',
+    state: 'info', stateText: (window.gmI18n && gmI18n.langs[settings().lang]) || settings().lang || '',
+    body: settingsForm([{ key: 'lang', type: 'select', label: '화면 언어', options: [['ko', '한국어'], ['en', 'English']],
+      hint: '로그인 화면과 모든 계정에 적용됩니다. 서버가 만드는 파일(Caddyfile 주석 등)은 한국어 그대로입니다.' }],
+    { grid: false, onSaved: (p) => { if (window.gmI18n && p.lang) gmI18n.sync(p.lang); } }) });
   steps.push({ id: 'about', title: '정보', aside: true, state: 'info', stateText: st.version ? `v${st.version}` : '',
     body: h('dl', { class: 'kv' },
       h('dt', null, '버전'), h('dd', null, st.version || '—'),
@@ -3116,6 +3154,7 @@ function renderGilmok(panel) {
 // ======================================================================= boot
 
 async function boot() {
+  if (window.gmI18n) await gmI18n.ready; // translations first (non-Korean UI)
   initAuthForm();
   initShell();
   let st;
@@ -3124,6 +3163,12 @@ async function boot() {
   } catch (e) {
     document.body.append(h('div', { class: 'auth' }, h('div', { class: 'glass auth-card' }, errorBox(e.message))));
     return;
+  }
+  // the install's language: not chosen yet → ask first; otherwise follow it (reloads if this
+  // browser still shows another one)
+  if (window.gmI18n) {
+    if (!st.lang) { showLangChooser(); return; }
+    if (gmI18n.sync(st.lang)) return;
   }
   $('#auth-ver').textContent = st.version ? `v${st.version}` : '';
   if (st.loggedIn) await showApp();

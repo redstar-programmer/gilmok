@@ -49,7 +49,7 @@ const fmtNum = (v) => {
   const a = Math.abs(v);
   if (a >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
   if (a >= 1e4) return `${(v / 1e3).toFixed(1)}k`;
-  return Number.isInteger(v) ? v.toLocaleString('ko-KR') : v.toLocaleString('ko-KR', { maximumFractionDigits: 1 });
+  return Number.isInteger(v) ? v.toLocaleString(gmLocale()) : v.toLocaleString(gmLocale(), { maximumFractionDigits: 1 });
 };
 const fmtBytes = (v) => {
   if (!v) return '0 B';
@@ -59,8 +59,8 @@ const fmtBytes = (v) => {
   return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${u[i]}`;
 };
 const fmtMs = (v) => (v >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 0 : 2)}s` : `${Math.round(v)}ms`);
-const hhmm = (t) => new Date(t).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
-const hhmmss = (t) => new Date(t).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+const hhmm = (t) => new Date(t).toLocaleTimeString(gmLocale(), { hour: '2-digit', minute: '2-digit', hour12: false });
+const hhmmss = (t) => new Date(t).toLocaleTimeString(gmLocale(), { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 const ago = (t) => {
   const s = Math.max(0, Math.round((Date.now() - t) / 1000));
   return s < 60 ? `${s}초 전` : s < 3600 ? `${Math.floor(s / 60)}분 전` : `${Math.floor(s / 3600)}시간 전`;
@@ -590,7 +590,7 @@ function paintStream() {
   const s = DASH.stream || {};
   const chip = dashHead.querySelector('.stream-chip');
   if (!chip) return;
-  if (DASH.at) { chip.replaceChildren(statusPill('warn', `과거 보기 · ${new Date(DASH.at).toLocaleString('ko-KR', { hour12: false })} 기준`)); return; }
+  if (DASH.at) { chip.replaceChildren(statusPill('warn', `과거 보기 · ${new Date(DASH.at).toLocaleString(gmLocale(), { hour12: false })} 기준`)); return; }
   if (dashEmpty) {
     const none = !DASH.at && s.ok && !s.lastTs && settings().dashLogs && use('caddy');
     dashEmpty.replaceChildren(...(none ? [callout('', h('b', null, '아직 수집된 요청이 없습니다'),

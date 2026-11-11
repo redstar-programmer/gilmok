@@ -10,13 +10,14 @@
 # a particular server.
 #
 # What it does (safe to re-run):
-#   1. creates <Target>\{data,secrets,src}
-#   2. copies the source (this repository) to <Target>\src and the compose file to <Target>
+#   1. creates <Target>\{data,secrets}
+#   2. copies the compose file to <Target>; with -Build also the source (this repository) to <Target>\src
 #   3. writes <Target>\secrets\cf_token from the running Caddy container (only if missing;
 #      the token is never printed). Not found = enter it later in the web UI.
 #   4. -CrowdSec: adds a CrowdSec container with a generated bouncer key;
 #      remembered in <Target>\.env (COMPOSE_PROFILES=crowdsec), so later runs keep it
-#   5. docker compose up -d --build
+#   5. docker compose pull + up -d  (the published image vitive/gilmok; -Build builds from source,
+#      remembered in .env as GM_BUILD=1 - -Build:$false goes back to the image)
 # It never touches the Caddy / Authelia containers themselves.
 
 param(
@@ -33,6 +34,9 @@ param(
     [string]$Domain = "",            # e.g. example.com (empty: set it in the web UI, or import the Caddyfile)
     [string]$TailscaleIP = "",       # e.g. 100.64.0.10
     [string]$TimeZone = "",          # e.g. Asia/Seoul (default UTC)
+    [string]$Image = "",             # default vitive/gilmok:latest (e.g. vitive/gilmok:0.2.0 to pin)
+    [string]$Lang = "",              # ko | en (empty: the first visit asks)
+    [switch]$Build,                  # build from this repository instead of pulling the image
     [switch]$RenewToken,
     [switch]$CrowdSec
 )
@@ -79,6 +83,10 @@ $CaddyContainer    = Resolve-Opt "GM_CADDY_CONTAINER" $CaddyContainer "caddy"
 $AutheliaContainer = Resolve-Opt "GM_AUTHELIA_CONTAINER" $AutheliaContainer "authelia"
 $CrowdSecContainer = Resolve-Opt "GM_CROWDSEC_CONTAINER" $CrowdSecContainer "crowdsec"
 $null              = Resolve-Opt "TZ" $TimeZone "UTC"
+$null              = Resolve-Opt "GM_IMAGE" $Image "vitive/gilmok:latest"
+if ($Lang -ne "") { Set-EnvKey "GM_LANG" $Lang }
+if ($PSBoundParameters.ContainsKey("Build")) { Set-EnvKey "GM_BUILD" ($(if ($Build) { "1" } else { "0" })) }
+$useBuild = (Get-EnvKey "GM_BUILD") -eq "1"
 if ($Domain -ne "") { Set-EnvKey "GM_DOMAIN" $Domain }
 if ($TailscaleIP -ne "") { Set-EnvKey "GM_TAILSCALE_IP" $TailscaleIP }
 
@@ -93,19 +101,23 @@ foreach ($p in @("$CaddyDir\Caddyfile", "$AutheliaConfigDir\configuration.yml"))
 
 # --- folders
 Step "Folders in $Target"
-foreach ($d in @($Target, "$Target\data", "$Target\secrets", "$Target\src")) {
+foreach ($d in @($Target, "$Target\data", "$Target\secrets")) {
     if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d | Out-Null }
 }
 
-# --- source + compose
-Step "Copy source to $Target\src"
-Get-ChildItem "$Target\src" -Force | Remove-Item -Recurse -Force
-$items = @("go.mod", "go.sum", "Dockerfile", ".dockerignore", "web", "testdata")
-$items += (Get-ChildItem "$repo\*.go" | ForEach-Object { $_.Name })
-foreach ($i in $items) {
-    if (Test-Path "$repo\$i") { Copy-Item "$repo\$i" "$Target\src\" -Recurse -Force }
-}
+# --- compose (+ source when building)
 Copy-Item "$repo\deploy\docker-compose.yml" "$Target\docker-compose.yml" -Force
+if ($useBuild) {
+    Step "Copy source to $Target\src"
+    if (-not (Test-Path "$Target\src")) { New-Item -ItemType Directory -Path "$Target\src" | Out-Null }
+    Get-ChildItem "$Target\src" -Force | Remove-Item -Recurse -Force
+    $items = @("go.mod", "go.sum", "Dockerfile", ".dockerignore", "web", "testdata")
+    $items += (Get-ChildItem "$repo\*.go" | ForEach-Object { $_.Name })
+    foreach ($i in $items) {
+        if (Test-Path "$repo\$i") { Copy-Item "$repo\$i" "$Target\src\" -Recurse -Force }
+    }
+    Copy-Item "$repo\deploy\docker-compose.build.yml" "$Target\docker-compose.build.yml" -Force
+}
 
 # --- Cloudflare token (from the running Caddy container's environment)
 $tokenFile = "$Target\secrets\cf_token"
@@ -163,11 +175,18 @@ if ($csOn) {
     Write-Host "    $envFile : COMPOSE_PROFILES=crowdsec"
 }
 
-# --- build + start
-Step "docker compose up -d --build"
+# --- start (pull the image, or build from source)
 Push-Location $Target
 try {
-    docker compose up -d --build
+    if ($useBuild) {
+        Step "docker compose up -d --build (from source)"
+        docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+    } else {
+        Step "docker compose pull + up -d ($(Get-EnvKey 'GM_IMAGE'))"
+        docker compose pull gilmok
+        if ($LASTEXITCODE -ne 0) { throw "docker compose pull failed" }
+        docker compose up -d
+    }
     if ($LASTEXITCODE -ne 0) { throw "docker compose failed" }
 } finally { Pop-Location }
 

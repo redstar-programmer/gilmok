@@ -26,7 +26,9 @@ function resetStep() {
   const word = h('input', { type: 'text', placeholder: '초기화', autocomplete: 'off', disabled: !allowed, 'aria-label': '확인 문구' });
   const go = h('button', { type: 'button', class: 'btn danger solid', disabled: true }, '초기화');
   const err = h('div');
-  const sync = () => { go.disabled = !allowed || word.value.trim() !== '초기화'; };
+  // the server wants 초기화; in another UI language the translated word ("reset") is accepted too
+  const typed = () => { const v = word.value.trim(); return v === '초기화' || v.toLowerCase() === 'reset'; };
+  const sync = () => { go.disabled = !allowed || !typed(); };
   word.addEventListener('input', sync);
 
   api('GET', '/api/reset/plan').then((p) => {
@@ -58,7 +60,7 @@ function resetStep() {
     if (!ok) return;
     err.replaceChildren();
     try {
-      const res = await busy(go, () => api('POST', '/api/reset', { confirm: word.value.trim(), accounts: withAcct }));
+      const res = await busy(go, () => api('POST', '/api/reset', { confirm: '초기화', accounts: withAcct }));
       if (res.loggedOut) { location.hash = ''; location.reload(); return; }
       toast(`초기화했습니다 — 이전 데이터는 백업 ${String(res.plan.backup || '').split(/[\\/]/).pop()}`);
       word.value = '';

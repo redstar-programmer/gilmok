@@ -26,35 +26,38 @@ powershell -ExecutionPolicy Bypass -File .\deploy\install.ps1 -Target D:\Docker\
 
 - 넘긴 옵션은 `<Target>\.env`에 저장됩니다. **다시 실행할 때(= 길목 업데이트)는 옵션 없이** `install.ps1 -Target D:\Docker\gilmok`만 하면 저장된 값을 씁니다.
 - `-Domain`·`-TailscaleIP`는 처음 시작할 때의 기본값입니다. 빼면 웹 화면(설정 탭 › 도메인)에서 정하거나, 「기존 설정 가져오기」 때 Caddyfile의 사이트 주소에서 자동으로 알아냅니다.
-- 그 밖의 옵션: `-Container`(길목 컨테이너 이름, 기본 `gilmok`), `-Port`(127.0.0.1에 여는 포트, 기본 `8088`), `-CrowdSecContainer`.
+- 그 밖의 옵션: `-Container`(길목 컨테이너 이름, 기본 `gilmok`), `-Port`(127.0.0.1에 여는 포트, 기본 `8088`), `-CrowdSecContainer`, `-Lang ko|en`(화면 언어 — 빼면 첫 접속에서 고름), `-Image`(기본 `vitive/gilmok:latest`, 예: `vitive/gilmok:0.2.0`으로 고정), `-Build`(Docker Hub 이미지 대신 이 저장소에서 빌드, `.env`에 기억 — `-Build:$false`로 되돌림).
 
 스크립트가 하는 일은 다음과 같습니다. 다시 실행해도 안전합니다.
 
-1. `<Target>\{data,secrets,src}`를 만듭니다.
-2. 소스를 `src`에 복사하고 `docker-compose.yml`을 놓습니다.
+1. `<Target>\{data,secrets}`를 만듭니다.
+2. `docker-compose.yml`을 놓습니다 (`-Build`면 소스도 `src`에 복사).
 3. **Cloudflare 토큰**을 실행 중인 Caddy 컨테이너의 환경변수(`CLOUDFLARE_API_TOKEN`)에서 읽어 `secrets\cf_token`에 저장합니다. 화면에는 출력하지 않습니다.
    - 토큰을 바꿨다면 `-RenewToken` 옵션으로 다시 읽습니다.
    - 찾지 못해도 설치는 계속됩니다. 설치 뒤 웹 화면의 **Cloudflare 탭 › API 토큰 · 존**에서 붙여넣으면 됩니다(만드는 방법도 그 화면에 있음). 저장 전에 Cloudflare에 실제로 조회해 확인합니다.
-4. `docker compose up -d --build`를 실행합니다. 빌드 과정에서 `go test`가 함께 돌고, 테스트가 실패하면 설치도 멈춥니다.
+4. Docker Hub 이미지(`vitive/gilmok`)를 받아 `docker compose up -d`로 띄웁니다. `-Build`면 `docker compose ... up -d --build`로 빌드하고, 빌드 과정에서 `go test`가 함께 돌아 테스트가 실패하면 설치도 멈춥니다.
 
 `secrets\cf_token`은 평문 파일입니다. 필요하면 읽기 권한을 본인 계정으로 좁히세요(Docker가 읽을 수 있는지 꼭 확인).
 
 ### 직접 compose로 설치 (리눅스 등)
 
 ```bash
-mkdir -p ~/gilmok/{data,secrets} && cd ~/gilmok
-cp -r /path/to/gilmok src                       # 이 저장소
-cp src/deploy/docker-compose.yml . && cp src/deploy/.env.example .env
+mkdir -p ~/gilmok/secrets && cd ~/gilmok
+curl -fsSLO https://raw.githubusercontent.com/redstar-programmer/gilmok/main/deploy/docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/redstar-programmer/gilmok/main/deploy/.env.example -o .env
 touch secrets/cf_token secrets/crowdsec_key     # 파일이 없으면 Docker가 폴더로 만들어 버림
-$EDITOR .env                                    # 폴더·컨테이너 이름·네트워크
+$EDITOR .env                                    # 폴더·컨테이너 이름·네트워크·언어(GM_LANG)
 docker network create reverseproxy 2>/dev/null || true
-docker compose up -d --build
+docker compose up -d
 ```
+
+업데이트: `docker compose pull && docker compose up -d`. 소스에서 빌드하려면 저장소를 `src`에 받고 `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`.
 
 ## 2. 첫 접속
 
 서버에서(직접 또는 원격 데스크톱·SSH 터널로) **http://127.0.0.1:8088**에 접속합니다 (`-Port`를 바꿨다면 그 포트).
 
+0. **화면 언어**(한국어 / English)를 고릅니다. 이 설치의 모든 화면이 그 언어로 나오고, 나중에 설정 탭 › 화면 언어에서 바꿉니다 (`GM_LANG`/`-Lang`으로 정했으면 이 화면은 건너뜀).
 1. 아이디 **`admin`**, 비밀번호 **`admin`**으로 로그인합니다(새로 설치했을 때만 있는 초기 계정).
 2. 바로 **새 관리자 계정 만들기** 화면이 나옵니다. 본인 아이디(`admin` 말고)와 비밀번호(12자 이상)를 정하면, 그 계정으로 이어서 들어가고 **admin/admin은 그 즉시 비활성화**됩니다(비밀번호도 무작위로 바뀌어 다시 켤 수 없음). Authelia 사용자와는 별개입니다.
    - 새로 설치한 뒤 이 단계를 마치기 전까지는 누구나 아는 비밀번호이므로, 설치하자마자 바로 진행하세요(접속은 서버의 127.0.0.1:8088에서만 됩니다).
@@ -99,7 +102,10 @@ Caddy 탭이나 Authelia 탭의 「이미지 업데이트」 단계를 씁니다
 
 ## 5. 길목 자체 업데이트
 
-저장소를 새 버전으로 바꾼 뒤 1단계 명령을 다시 실행합니다. `data`(설정 DB, 백업)와 `secrets`는 그대로 유지됩니다.
+- compose: `docker compose pull && docker compose up -d` (`.env`의 `GM_IMAGE`로 버전 고정 가능)
+- Windows 스크립트: `install.ps1 -Target <폴더>`를 다시 실행 (Docker Hub 이미지를 다시 받음, `-Build`로 설치했다면 저장소를 새 버전으로 바꾼 뒤 실행)
+
+`data`(설정 DB, 백업)와 `secrets`는 그대로 유지됩니다.
 
 ## 5-0. 구성요소 (설정 탭 › 구성요소)
 

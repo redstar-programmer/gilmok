@@ -5,3 +5,6 @@ reference
 *.exe
 .env
 secrets
+.git
+.github
+tools

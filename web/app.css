@@ -1207,3 +1207,17 @@ input.need { border-color: var(--warn); }
 .tip-sub { color: var(--muted); font-size: 11.5px; word-break: break-all; }
 .tip-foot { margin: 0; color: var(--muted); font-size: 11.5px; }
 .pending-pill { font-family: inherit; cursor: pointer; }
+
+/* the brand shows the English name only once in English */
+html:not([lang="ko"]) .brand-en { display: none; }
+
+/* first visit: language chooser (showLangChooser) */
+.lang-choose h1 { font-size: 17px; margin: 6px 0 2px; }
+.lang-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.lang-card { display: grid; gap: 4px; text-align: left; padding: 14px; border-radius: 12px; border: 1px solid var(--line-2);
+  background: rgb(var(--panel) / .5); color: var(--fg); font: inherit; cursor: pointer; }
+.lang-card b { font-size: 16px; }
+.lang-card small { color: var(--muted); }
+.lang-card:hover { border-color: var(--accent); }
+.lang-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 480px) { .lang-cards { grid-template-columns: 1fr; } }

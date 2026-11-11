@@ -1,0 +1,25 @@
+# go vet + go test on every push and pull request.
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      - name: UI message catalog is up to date
+        run: |
+          go run ./tools/i18n
+          git diff --exit-code -- web/i18n/ko.json || (echo "::error::web/i18n/ko.json is stale — run: go run ./tools/i18n" && exit 1)

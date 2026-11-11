@@ -108,7 +108,7 @@ function proxySitesStep() {
       h('caption', { class: 'sr-only' }, '리버스 프록시 사이트'),
       h('thead', null, h('tr', null, h('th', { scope: 'col', class: 'sel-cell' }, allCb), ['사이트', '대상 · 상태', '노출', '보호', ''].map((t) => h('th', { scope: 'col' }, t)))),
       tbody)),
-    h('p', { class: 'hint' }, '저장하면 「적용 대기」에 쌓이고, 상단 「적용」을 누르면 Caddyfile 생성 → 검증 → 무중단 reload' + (use('cloudflare') ? ' → DNS 동기화' : '') + ' 순서로 반영됩니다. 실패하면 이전 파일로 되돌립니다.'));
+    h('p', { class: 'hint' }, `저장하면 「적용 대기」에 쌓이고, 상단 「적용」을 누르면 Caddyfile 생성 → 검증 → 무중단 reload${use('cloudflare') ? ' → DNS 동기화' : ''} 순서로 반영됩니다. 실패하면 이전 파일로 되돌립니다.`));
   return {
     id: 'sites', title: '리버스 프록시', desc: '사이트(서브도메인 → 내부 서비스 host:port)를 추가·수정·삭제합니다. 엑셀로 한 번에 올릴 수도 있습니다.',
     state: nSites ? 'ok' : 'todo', stateText: `사이트 ${nSites}개`, body,

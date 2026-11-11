@@ -47,6 +47,7 @@ type Service struct {
 }
 
 type Settings struct {
+	Lang             string `json:"lang"`              // UI language of this install: ko | en ("" = not chosen yet — the first visit asks)
 	Domain           string `json:"domain"`            // e.g. example.com ("" until set — 설정 탭 › 도메인)
 	TailscaleIP      string `json:"tailscaleIp"`       // e.g. 100.64.0.10
 	TailscalePort    int    `json:"tailscalePort"`     // 8443 (Caddy listener for tailnet-only sites)
@@ -263,6 +264,9 @@ type Store struct {
 // environment (GM_DOMAIN, GM_CADDY_CONTAINER …) on top.
 func defaultSettings() Settings {
 	s := baseSettings()
+	if l := env("GM_LANG", ""); uiLangs[l] {
+		s.Lang = l // preset by the deployment (otherwise the first visit asks)
+	}
 	s.Domain = env("GM_DOMAIN", s.Domain)
 	s.TailscaleIP = env("GM_TAILSCALE_IP", s.TailscaleIP)
 	s.CaddyContainer = env("GM_CADDY_CONTAINER", s.CaddyContainer)
@@ -402,6 +406,9 @@ func OpenStore(path string) (*Store, error) {
 	migrateAccounts(&s.d)
 	if len(s.d.Services) > 0 {
 		s.d.SetupDone = true // installs that already have sites never get the first-run prompt
+	}
+	if st.Lang == "" && (s.d.SetupDone || len(s.d.Services) > 0) {
+		st.Lang = "ko" // installs from before the language choice keep the Korean UI
 	}
 	if !st.WafV2 {
 		st.WafV2, st.WafInbound, st.WafOutbound, st.WafMethods = true, def.WafInbound, def.WafOutbound, def.WafMethods

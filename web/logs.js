@@ -201,7 +201,7 @@ function reqRow(x) {
     h('td', null, fmtMs(x.ms)), h('td', null, fmtBytes(x.size)), h('td', { class: 'mono' }, x.ip || '—'))];
 }
 
-const fmtTimeSec = (ms) => new Date(ms).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+const fmtTimeSec = (ms) => new Date(ms).toLocaleString(gmLocale(), { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
 function logSettings() {
   const form = settingsForm([

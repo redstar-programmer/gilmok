@@ -1,0 +1,7 @@
+# Build Gilmok from source instead of pulling the published image.
+# Expects this repository (or a copy of it) in ./src next to docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+services:
+  gilmok:
+    build: ./src
+    image: gilmok:local

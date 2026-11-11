@@ -344,7 +344,7 @@ func (a *Auth) state(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// before login: only what the login screen needs (firstRun = show the admin/admin hint)
-	res := map[string]any{"setup": len(d.Accounts) == 0, "firstRun": firstRun, "loggedIn": false}
+	res := map[string]any{"setup": len(d.Accounts) == 0, "firstRun": firstRun, "loggedIn": false, "lang": d.Settings.Lang}
 	if s := a.session(r); s != nil {
 		if acct := d.account(s.User); acct != nil && !acct.Disabled {
 			res["loggedIn"], res["me"] = true, a.meView(&d, acct)
@@ -1286,3 +1286,38 @@ func unknownPerms(ps []string) []string {
 	}
 	return bad
 }
+
+// uiLangs: languages the UI has (web/i18n/<lang>.json; ko is the source text).
+var uiLangs = map[string]bool{"ko": true, "en": true}
+
+// chooseLang: the very first visit picks the UI language of this install, before any login exists
+// to ask for. Allowed only while no language is set — afterwards it is a setting (설정 탭 › 화면 언어),
+// changed with the usual permissions.
+func (a *Auth) chooseLang(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Lang string `json:"lang"`
+	}
+	if err := readJSON(r, &in); err != nil || !uiLangs[in.Lang] {
+		fail(w, 400, errors.New("화면 언어는 ko 또는 en 이어야 합니다"))
+		return
+	}
+	err := a.store.Update(func(d *Data) error {
+		if d.Settings.Lang != "" {
+			return errLangChosen
+		}
+		d.Settings.Lang = in.Lang
+		return nil
+	})
+	if errors.Is(err, errLangChosen) {
+		fail(w, 409, errors.New("화면 언어는 이미 정해져 있습니다 — 설정 탭에서 바꾸세요"))
+		return
+	}
+	if err != nil {
+		fail(w, 500, err)
+		return
+	}
+	a.auditAs(r, "("+viaText(r)+")", "audit", "info", "settings.lang", in.Lang, "첫 접속 화면 언어: "+in.Lang, nil)
+	writeJSON(w, 200, map[string]string{"lang": in.Lang})
+}
+
+var errLangChosen = errors.New("language already chosen")

@@ -1,6 +1,9 @@
-# Gilmok — deployment compose file. deploy\install.ps1 copies it next to a `.env` that holds the
-# values of this environment (folders, container names, network). Every ${...} below has a default,
-# so it also works with `docker compose up -d` after you fill `.env` by hand (see .env.example).
+# Gilmok — deployment compose file. Uses the published image (Docker Hub: vitive/gilmok);
+# to build from this repository instead add docker-compose.build.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+# deploy\install.ps1 copies it next to a `.env` that holds the values of this environment (folders,
+# container names, network). Every ${...} below has a default, so it also works with
+# `docker compose up -d` after you fill `.env` by hand (see .env.example).
 #
 # The admin UI is published on 127.0.0.1 only (first setup / emergency access on the server itself).
 # Remote access goes through Caddy as a private (e.g. Tailscale-only) + Authelia site.
@@ -11,8 +14,7 @@ name: gilmok
 
 services:
   gilmok:
-    build: ./src
-    image: gilmok:local
+    image: ${GM_IMAGE:-vitive/gilmok:latest}
     container_name: ${GM_CONTAINER:-gilmok}
     restart: unless-stopped
     logging: &logs
@@ -26,6 +28,7 @@ services:
     environment:
       TZ: ${TZ:-UTC}
       # first-start defaults only (later the 설정 tab is the source of truth); empty = asked in the UI
+      GM_LANG: ${GM_LANG:-}            # ko | en — empty: the first visit asks
       GM_DOMAIN: ${GM_DOMAIN:-}
       GM_TAILSCALE_IP: ${GM_TAILSCALE_IP:-}
       GM_CADDY_CONTAINER: ${GM_CADDY_CONTAINER:-caddy}

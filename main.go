@@ -86,6 +86,7 @@ func (app *App) handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/setup", auth.setup)
 	mux.HandleFunc("POST /api/auth/login", auth.login)
 	mux.HandleFunc("POST /api/auth/logout", auth.logout)
+	mux.HandleFunc("POST /api/auth/lang", auth.chooseLang) // first visit only (language not chosen yet)
 
 	S := auth.sensitive // step-up: fresh password (+TOTP) required
 	api := http.NewServeMux()
@@ -921,6 +922,9 @@ func normalizeSettings(p *Settings) error {
 	in.LogInit, in.SecInit, in.UseInit, in.UseTSInit = true, true, true, true
 	if !in.UseCloudflare {
 		in.CrowdSecSync = false // bans are pushed to Cloudflare; without it CrowdSec only decides
+	}
+	if in.Lang != "" && !uiLangs[in.Lang] {
+		return errors.New("화면 언어는 ko 또는 en 이어야 합니다")
 	}
 	in.Domain = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(in.Domain)), ".")
 	if in.Domain != "" && !reHostname.MatchString(in.Domain) { // empty = not chosen yet (설정 탭 › 도메인)

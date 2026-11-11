@@ -120,10 +120,14 @@ for (const [k, v] of Object.entries({ orange: '--orange', gray: '--gray-cloud', 
   Object.defineProperty(TC, k, { get: () => cssVar(v), enumerable: true });
 }
 
+// UI language (i18n.js): SVG text is translated before it is drawn, so box widths (textW) fit the
+// text that is actually shown
+const T = (s) => (window.gmI18n ? gmI18n.tr(String(s)) : String(s));
+
 function sv(tag, attrs, ...kids) {
   const el = document.createElementNS(SVG_NS, tag);
   for (const [k, v] of Object.entries(attrs || {})) if (v != null && v !== false) el.setAttribute(k, String(v));
-  for (const k of kids.flat(Infinity)) if (k != null && k !== false) el.append(k instanceof Node ? k : document.createTextNode(String(k)));
+  for (const k of kids.flat(Infinity)) if (k != null && k !== false) el.append(k instanceof Node ? k : document.createTextNode(T(k)));
   return el;
 }
 
@@ -140,8 +144,13 @@ function topoIcon(name, x, y, size, color) {
   return g;
 }
 
-const textW = (s, size) => [...String(s)].reduce((w, ch) => w + (/[ㄱ-힝]/.test(ch) ? size * 0.95 : /[A-Z0-9]/.test(ch) ? size * 0.64 : size * 0.56), 0);
-const clip = (s, n) => (String(s).length > n ? `${String(s).slice(0, n - 1)}…` : String(s));
+const textW = (s, size) => [...T(s)].reduce((w, ch) => w + (/[ㄱ-힝]/.test(ch) ? size * 0.95 : /[A-Z0-9]/.test(ch) ? size * 0.64 : size * 0.56), 0);
+// translate first, then clip (Latin letters are narrower than Hangul, so more of them fit)
+const clip = (s, n) => {
+  const x = T(s);
+  const m = /[가-힣]/.test(x) ? n : Math.round(n * 1.4);
+  return x.length > m ? `${x.slice(0, m - 1)}…` : x;
+};
 
 function topologyView(onOpen, info, onEdit) {
   const st = S.state;
