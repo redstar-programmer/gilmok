@@ -221,7 +221,7 @@ func (a *App) checkCaddy() CheckResult {
 			}
 			if ca := a.caddyCAFile(); ca != "" && mtls > 0 {
 				if _, err := os.Stat(ca); err != nil {
-					r.add("ca", "mTLS CA (인증된 원본 풀)", "fail", fmt.Sprintf("mTLS 사이트가 %d개인데 이 Caddy에 Cloudflare 인증된 원본 풀 CA 파일이 없습니다 — 적용할 때 검증에서 걸립니다. 「mTLS 만들기·넣기」에서 길목이 새로 만들거나 PEM을 넣으세요", mtls))
+					r.add("ca", "mTLS CA (인증된 원본 풀)", "warn", fmt.Sprintf("mTLS 사이트 %d개가 보류 중입니다 — 이 Caddy에 Cloudflare 인증된 원본 풀 CA 파일이 없어 적용에서 빠집니다(나머지는 적용됨). 「mTLS 만들기·넣기」에서 길목이 새로 만들거나 PEM을 넣으세요", mtls))
 				} else {
 					r.add("ca", "mTLS CA (인증된 원본 풀)", "ok", "conf/certs/cf-origin-pull-ca.pem")
 				}

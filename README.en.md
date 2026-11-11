@@ -108,7 +108,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Settings and logs stay in `./data`. To pin a version, change the image in the compose file to something like `vitive/gilmok:0.1.5`.
+Settings and logs stay in `./data`. To pin a version, change the image in the compose file to something like `vitive/gilmok:0.1.6`.
 
 ## Environment variables
 

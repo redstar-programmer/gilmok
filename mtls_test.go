@@ -122,3 +122,38 @@ func TestCaddyMTLSGenerate(t *testing.T) {
 		t.Fatal("a private key ended up in gilmok.json")
 	}
 }
+
+// A Caddy Gilmok installed without its mTLS CA: the mTLS sites are held back (left out of the
+// Caddyfile, still pending) and everything else is applied.
+func TestApplyHoldsMTLSWithoutCA(t *testing.T) {
+	f, sf := newStack(t)
+	stackDocker(t, sf)
+	stackDir := filepath.Join(f.dir, "stacks", "caddy")
+	f.set(func(d *Data) {
+		d.Stacks = map[string]*ManagedStack{"caddy": {Name: "caddy", Container: "cad", Dir: stackDir}}
+		d.Settings.UseCloudflare = true // mTLS is generated only with Cloudflare
+		d.Services = append(d.Services, &Service{ID: "m1", Subdomain: "notes", Upstream: "joplin:22300", Exposure: ExposurePublic, Proxied: true, MTLS: true, Enabled: true, Authelia: AutheliaOpts{Policy: "two_factor"}})
+	})
+	lines, err := f.app.Apply(false)
+	if err != nil {
+		t.Fatalf("apply: %v\n%s", err, strings.Join(lines, "\n"))
+	}
+	got := read(t, sf.caddyfile)
+	if strings.Contains(got, "notes.example.com") || !strings.Contains(got, "photos.example.com") {
+		t.Fatalf("the mTLS site must be held, the rest applied:\n%s", got)
+	}
+	d := f.app.store.Snapshot()
+	if !d.Dirty || len(d.Pending) == 0 || !strings.Contains(strings.Join(d.Pending, " "), "notes") {
+		t.Fatalf("the held site must stay pending: %v", d.Pending)
+	}
+	// with the CA in place the site is applied
+	os.MkdirAll(filepath.Join(stackDir, "conf", "certs"), 0o755)
+	caPEM, _, _, _ := genMTLS("example.com", time.Now())
+	os.WriteFile(filepath.Join(stackDir, "conf", "certs", "cf-origin-pull-ca.pem"), []byte(caPEM), 0o644)
+	if _, err := f.app.Apply(false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(read(t, sf.caddyfile), "notes.example.com") || f.app.store.Snapshot().Dirty {
+		t.Fatal("with the CA the mTLS site must be applied and nothing left pending")
+	}
+}

@@ -108,7 +108,7 @@ docker compose pull
 docker compose up -d
 ```
 
-설정과 로그는 `./data`에 남아 있습니다. 버전을 고정하려면 compose 파일의 이미지를 `vitive/gilmok:0.1.5`처럼 바꾸세요.
+설정과 로그는 `./data`에 남아 있습니다. 버전을 고정하려면 compose 파일의 이미지를 `vitive/gilmok:0.1.6`처럼 바꾸세요.
 
 ## 환경변수
 

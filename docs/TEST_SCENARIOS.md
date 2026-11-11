@@ -742,3 +742,35 @@ go test -count=1 -run 'Groups|Bulk' ./...   # 일부
 | I18N-06 | 언어 선택 화면 → 다른 브라우저 | 새 설치 접속 → English → 캐시 지운 브라우저 → 설정 탭에서 한국어 | 선택 화면, 영어 로그인, 다른 브라우저도 영어, 설정 저장 후 한국어로 새로고침 | P2 | ✅ 수동 (2026-11-11) |
 | REL-01 | 멀티 아키텍처 이미지 빌드 | `docker buildx build --platform linux/amd64 --build-arg VERSION=…` | go vet·test 통과, 라벨 version, TZ=UTC | P2 | ✅ 수동 |
 
+
+## FRESH — 새 사용자 처음 설치 흐름 (`scn_fresh_test.go`, 실제 Docker E2E)
+
+처음부터 길목으로 Caddy·Authelia·CrowdSec을 설치하는 사용자가 실제로 겪은 문제(525·502·검증 실패)를 케이스로 고정한다. 단위·시나리오는 가짜 Docker·가짜 Cloudflare, E2E는 이 PC의 Docker에 격리된 이름·포트로 실제 설치.
+
+| ID | 시나리오 | 입력·조건 | 기대 결과 | P | 자동화 |
+|---|---|---|---|---|---|
+| FRESH-01 | 관리형 Caddy 골격 맞춤 | 예전 Caddy에서 가져온 골격(CA 경로 `/etc/caddy/…`, `forward_auth authelia`, 인증서 방식 없음) + 토큰 | CA 경로 → `conf/certs`, forward_auth → 관리형 Authelia, `acme_dns` 추가 | P1 | ✅ `TestFreshFitManagedBase` |
+| FRESH-02 | 맞춤 반복 | 이미 맞춘 골격 | 바뀌는 것 없음(멱등) | P2 | ✅ |
+| FRESH-03 | 토큰 없음 | 위 골격, 토큰 없음 | `acme_dns` 넣지 않음 | P1 | ✅ |
+| FRESH-04 | 없는 스니펫 | mTLS·Authelia 서비스가 있는데 골격에 `cf_only`·`authelia` 없음 | 두 스니펫 추가 | P1 | ✅ |
+| FRESH-05 | 직접 운영하는 Caddy | 관리형 아님 | 골격을 건드리지 않음 | P1 | ✅ |
+| FRESH-06 | 보류: mTLS 스니펫 없음 | `cf_only` 없는 골격 + mTLS 사이트 | 그 사이트만 보류 | P1 | ✅ `TestFreshHoldSites` |
+| FRESH-07 | 보류: 모르는 스니펫 | 추가 지시어 `import my_headers` | 보류 | P1 | ✅ |
+| FRESH-08 | 보류 아님 | 정의된 스니펫 / 파일 import / `gm_*` | 그대로 적용 | P1 | ✅ |
+| FRESH-09 | 보류 결과 | 위 | 생성 파일에서 빠지고, 저장된 서비스는 그대로 | P1 | ✅ |
+| FRESH-10 | 네트워크 자동 선택 | Authelia·CrowdSec 설치, 네트워크 비움, Caddy=reverseproxy | Caddy 네트워크 | P1 | ✅ `TestFreshNetworkFollowsCaddy` + E2E-07 |
+| FRESH-11 | Caddy 없음 | 위, Caddy 컨테이너 없음 | 예전 자동 선택 | P2 | ✅ |
+| FRESH-12 | 네트워크 안내 데이터 | `/api/docker/networks` | 컨테이너 수·Caddy·길목 네트워크 | P2 | ✅ `TestFreshNetworkAdviceData` |
+| FRESH-13 | 점검: Caddy↔Authelia 네트워크 | 다른 네트워크 / 같은 네트워크 | fail + `docker network connect` 안내 / ok | P1 | ✅ `TestFreshAutheliaNetworkCheck` |
+| FRESH-14 | 점검: 인증서 방식 | acme_dns·dns cloudflare·local_certs·tls 파일 / 없음 | 인정 / Proxied 사이트 있으면 fail | P1 | ✅ `TestFreshCertMethodCheck` |
+| FRESH-15 | mTLS·CA API 권한 | 관리형 Caddy 없음 / 보기 전용 | 404(이유) / 403 | P1 | ✅ `TestFreshEndpointErrors` |
+| FRESH-16 | 토큰 없음·잘못된 PEM | | 400(토큰) / 400(CA), 올바른 PEM은 `conf/certs`에 저장 | P1 | ✅ |
+| FRESH-17 | Cloudflare 권한 부족 | 403 10000 | 502 + 「SSL 및 인증서 · 편집」 권한 안내 | P1 | ✅ |
+| FRESH-18 | 다른 프록시 불러오기 오류 | 파일 없음 / 모르는 형식 / 1MB 초과 / 도메인 없음 / 깨진 nginx | 400 / 400 / 경고로 건너뜀 / 400 / 경고 | P1 | ✅ |
+| FRESH-19 | 가져오기 → 설치 | 예전 골격을 가져온 뒤 관리형 Caddy 설치 | 설치가 골격을 맞춤(가져온 전역 옵션은 유지) | P1 | ✅ `TestFreshImportThenInstall` |
+| FRESH-20 | mTLS 생성 | 가짜 Cloudflare | 업로드·켜기·CA 저장, 다시 만들면 예전 것 삭제, 개인 키 저장 안 함 | P1 | ✅ `TestCaddyMTLSGenerate` |
+| FRESH-21 | CA 없는 mTLS 보류 | 관리형 Caddy, CA 없음 → CA 넣음 | 보류·적용 대기 유지 → 적용·대기 비움 | P1 | ✅ `TestApplyHoldsMTLSWithoutCA` |
+| FRESH-22 | 관리형에 가져오기 | 예전 Caddyfile을 관리형 Caddy·Authelia 위에 | 골격 유지·맞춤, Authelia 대상 교체, 포털 유지 | P1 | ✅ `TestImportIntoManagedStack` |
+| FRESH-23 | 탭에서만 설정 | 마법사 없이 적용 성공 | 설정 완료로 기록(로그인 때 설정 제안 안 띄움) | P2 | ✅ `TestFreshApplyMarksSetupDone` |
+| E2E-01~22 | 실제 처음 설치 | 실제 Docker: 언어 → 관리자 → Caddy(네트워크 지정·내부 인증서) → Authelia(네트워크 비움) → CrowdSec → 서비스 → 점검 → 적용 → 실제 접속 → CrowdSec 재시작 → 보류 | 전부 통과 | P1 | ✅ 24/24 (2026-11-11, 실제 Docker) |
+| E2E-P2-01~14 | 예전 Caddyfile → 관리형 스택 | PC 파일 가져오기 → CA 없이 적용(mTLS 보류) → 잘못된 PEM → CA 넣고 적용 → 클라이언트 인증서 없는 접속 거부 → 점검 | 전부 통과 | P1 | ✅ 14/14 (2026-11-11, 실제 Docker) |

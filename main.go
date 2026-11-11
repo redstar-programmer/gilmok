@@ -27,7 +27,7 @@ import (
 //go:embed web
 var webFS embed.FS
 
-var version = "0.1.5"
+var version = "0.1.6"
 
 func main() {
 	dataDir := env("GM_DATA", "/data")
@@ -567,6 +567,12 @@ func (a *App) importExisting(w http.ResponseWriter, r *http.Request) {
 	d0 := a.store.Snapshot()
 	if d0.Stacks["caddy"] != nil && strings.TrimSpace(d0.Settings.CaddyBase) != "" {
 		base = d0.Settings.CaddyBase
+		tmp := d0
+		tmp.Settings.CaddyBase, tmp.Services = base, svcs
+		if nb, changes := fitManagedBase(&tmp, cfToken() != ""); len(changes) > 0 {
+			base = nb
+			warns = append(warns, "기본 골격을 이 Caddy에 맞춤: "+strings.Join(changes, ", "))
+		}
 		warns = append([]string{"길목이 설치한 Caddy라 기본 골격(전역 옵션·스니펫)은 지금 것을 그대로 두고 사이트만 가져왔습니다 — 가져온 파일의 전역 옵션이 더 필요하면 Caddy 탭 › 전역 설정에서 옮기세요"}, warns...)
 	}
 	if arec := d0.Stacks["authelia"]; arec != nil {

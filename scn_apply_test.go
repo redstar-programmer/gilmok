@@ -175,7 +175,8 @@ func newStack(t *testing.T) (*fullApp, stackFiles) {
 		d.Settings.UseCaddy, d.Settings.UseAuthelia = true, true
 		d.Settings.CaddyMode, d.Settings.CaddyContainer, d.Settings.CaddyfilePath, d.Settings.CaddyfileInCtr = "docker", "cad", sf.caddyfile, "/etc/caddy/Caddyfile"
 		d.Settings.AutheliaCtr, d.Settings.AutheliaConfig, d.Settings.AutheliaUsers, d.Settings.AutheliaCtrDir = "auth", sf.autheliaCfg, sf.users, "/config"
-		d.Settings.CaddyBase = "{\n\temail x@example.com\n}\n"
+		// a real base defines the snippets the sites import (a missing one is now held, not applied)
+		d.Settings.CaddyBase = "{\n\temail x@example.com\n}\n\n(authelia) {\n\tforward_auth auth:9091 {\n\t\turi /api/authz/forward-auth\n\t}\n}\n\n(cf_only) {\n\ttls {\n\t\tclient_auth {\n\t\t\ttrust_pool file /etc/caddy/certs/cf-origin-pull-ca.pem\n\t\t}\n\t}\n}\n"
 		d.Services = []*Service{
 			{ID: "s1", Subdomain: "photos", Upstream: "immich:2283", Exposure: ExposurePublic, Enabled: true, ManageDNS: true, Authelia: AutheliaOpts{Enabled: true, Policy: "two_factor", Groups: []string{"family"}}},
 			{ID: "s2", Subdomain: "admin", Upstream: "dock:3000", Exposure: ExposurePublic, Enabled: true, ManageDNS: true, Authelia: AutheliaOpts{Enabled: true, Policy: "two_factor", Groups: []string{"admins"}}},

@@ -185,7 +185,25 @@ func renderCaddyStack(a *App, o map[string]string, dir, host, network, ctr strin
 	if err := writeCaddyEnv(dir, tok); err != nil {
 		return err
 	}
-	// base skeleton: only when Gilmok has none yet (an imported one is kept)
+	// base skeleton: Gilmok's own when there is none yet; an imported one is kept but made to fit this
+	// container (CA path, Authelia address, DNS certificates, missing cf_only / authelia snippets)
+	if strings.TrimSpace(a.store.Snapshot().Settings.CaddyBase) != "" {
+		_ = a.store.Update(func(d *Data) error {
+			// the record is written after the install: fit as if this container were the managed one
+			x := *d
+			if x.Stacks == nil || x.Stacks["caddy"] == nil {
+				x.Stacks = map[string]*ManagedStack{"caddy": {Name: "caddy", Container: ctr, Dir: dir}}
+				for k, v := range d.Stacks {
+					x.Stacks[k] = v
+				}
+			}
+			if nb, changes := fitManagedBase(&x, tok != ""); len(changes) > 0 {
+				d.Settings.CaddyBase = nb
+				log("  가져온 기본 골격을 이 Caddy에 맞춤: %s", strings.Join(changes, ", "))
+			}
+			return nil
+		})
+	}
 	if strings.TrimSpace(a.store.Snapshot().Settings.CaddyBase) == "" {
 		st := a.store.Snapshot().Settings
 		base := managedCaddyBase(st, o, tok != "")
@@ -313,23 +331,20 @@ func ensureAcmeDNS(base string) (string, bool) {
 // token, switch its base configuration to the DNS challenge (pending until 「적용」). Runs when the
 // token changes and at startup (installs made by older versions).
 func (a *App) fixManagedCaddyACME() {
-	if cfToken() == "" || a.store.Snapshot().Stacks["caddy"] == nil {
+	if a.store.Snapshot().Stacks["caddy"] == nil {
 		return
 	}
 	changed := false
 	_ = a.store.Update(func(d *Data) error {
-		if !d.Settings.UseCloudflare {
-			return nil
-		}
-		if nb, ok := ensureAcmeDNS(d.Settings.CaddyBase); ok {
+		if nb, changes := fitManagedBase(d, cfToken() != ""); len(changes) > 0 {
 			d.Settings.CaddyBase = nb
-			d.markDirty("관리형 Caddy: 인증서를 Cloudflare DNS로 받도록 전역 옵션에 acme_dns 추가")
+			d.markDirty("관리형 Caddy 기본 골격 맞춤: " + strings.Join(changes, ", "))
 			changed = true
 		}
 		return nil
 	})
 	if changed {
-		a.logEvent("system", "info", "stack.token", "caddy", "Cloudflare 토큰이 있어 관리형 Caddy의 인증서 발급을 DNS 방식(acme_dns)으로 바꿨습니다 — 「적용」하면 반영됩니다", nil)
+		a.logEvent("system", "info", "stack.token", "caddy", "관리형 Caddy의 기본 골격을 이 컨테이너에 맞췄습니다 — 「적용」하면 반영됩니다", nil)
 	}
 }
 
@@ -393,4 +408,64 @@ func (a *App) postCaddyCA(w http.ResponseWriter, r *http.Request) {
 	}
 	a.auth.audit(r, "audit", "warn", "Caddy mTLS CA 저장", "caddy", "관리형 Caddy의 인증된 원본 풀 CA를 저장했습니다", nil)
 	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
+var reTrustPool = regexp.MustCompile(`(trust_pool\s+file\s+|trusted_ca_cert_file\s+)(\S+)`)
+
+// fitManagedBase makes the base configuration fit a Caddy Gilmok installed. Typical source of a
+// mismatch: a Caddyfile imported from another Caddy (its CA path, its Authelia name, no DNS
+// certificates, a missing snippet). Returns the new base and what changed (none = nothing to do).
+func fitManagedBase(d *Data, hasToken bool) (string, []string) {
+	base := d.Settings.CaddyBase
+	var changes []string
+	if strings.TrimSpace(base) == "" || d.Stacks["caddy"] == nil {
+		return base, nil
+	}
+	// the mTLS CA lives at conf/certs/ in a managed Caddy
+	if nb := reTrustPool.ReplaceAllString(base, "${1}"+caddyCAPath); nb != base {
+		base = nb
+		changes = append(changes, "mTLS CA 경로 → "+caddyCAPath)
+	}
+	// forward_auth goes to the Authelia Gilmok installed
+	if rec := d.Stacks["authelia"]; rec != nil {
+		if m := reForwardAuth.FindStringSubmatch(base); m != nil && m[2] != rec.Container {
+			base = reForwardAuth.ReplaceAllString(base, "${1}"+rec.Container+"${3}")
+			changes = append(changes, "forward_auth → "+rec.Container)
+		}
+	}
+	// certificates by DNS when the sites sit behind the Cloudflare proxy
+	if hasToken && d.Settings.UseCloudflare {
+		if nb, ok := ensureAcmeDNS(base); ok {
+			base = nb
+			changes = append(changes, "acme_dns 추가")
+		}
+	}
+	// snippets the services need but the base does not define
+	defined := map[string]bool{}
+	for _, m := range reSnippetDef.FindAllStringSubmatch(base, -1) {
+		defined[m[1]] = true
+	}
+	needMTLS, needAuth := false, false
+	for _, s := range d.Services {
+		if s.Enabled && !s.DNSOnly {
+			needMTLS = needMTLS || (s.Exposure == ExposurePublic && s.Proxied && s.MTLS)
+			needAuth = needAuth || s.Authelia.Enabled
+		}
+	}
+	if needMTLS && d.Settings.UseCloudflare && !defined[snippetMTLS] {
+		base = strings.TrimRight(base, "\n") + "\n\n(" + snippetMTLS + ") {\n\ttls {\n\t\tclient_auth {\n\t\t\tmode require_and_verify\n\t\t\ttrust_pool file " + caddyCAPath + "\n\t\t}\n\t}\n}\n"
+		changes = append(changes, snippetMTLS+" 스니펫 추가")
+	}
+	if needAuth && d.Settings.UseAuthelia && !defined[snippetAuthelia] {
+		auth := d.Settings.AutheliaCtr
+		if rec := d.Stacks["authelia"]; rec != nil {
+			auth = rec.Container
+		}
+		if auth == "" {
+			auth = "authelia"
+		}
+		base = strings.TrimRight(base, "\n") + "\n\n(" + snippetAuthelia + ") {\n\tforward_auth " + auth + ":9091 {\n\t\turi /api/authz/forward-auth\n\t\tcopy_headers Remote-User Remote-Groups Remote-Name Remote-Email\n\t}\n}\n"
+		changes = append(changes, snippetAuthelia+" 스니펫 추가")
+	}
+	return base, changes
 }
