@@ -5,7 +5,8 @@
 # Needs two repository secrets (Settings › Secrets and variables › Actions):
 #   DOCKERHUB_USERNAME  the Docker Hub account (vitive)
 #   DOCKERHUB_TOKEN     a Docker Hub access token with Read & Write (not the account password)
-# A version tag also creates the GitHub release (notes: docs/releases/<tag>.md, else generated).
+# A version tag also creates the GitHub release (notes: docs/releases/<tag>.md, else generated) with
+# deploy/docker-compose.sample.yml attached as docker-compose.yml.
 name: docker
 
 on:
@@ -67,9 +68,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
+          mkdir -p dist && cp deploy/docker-compose.sample.yml dist/docker-compose.yml
           notes="docs/releases/${TAG}.md"
           if [ -f "$notes" ]; then
-            gh release create "$TAG" --title "Gilmok ${TAG}" --notes-file "$notes" --verify-tag
+            gh release create "$TAG" dist/docker-compose.yml --title "Gilmok ${TAG}" --notes-file "$notes" --verify-tag
           else
-            gh release create "$TAG" --title "Gilmok ${TAG}" --generate-notes --verify-tag
+            gh release create "$TAG" dist/docker-compose.yml --title "Gilmok ${TAG}" --generate-notes --verify-tag
           fi

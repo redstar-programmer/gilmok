@@ -145,7 +145,17 @@ flowchart TD
 
 The image is [`vitive/gilmok`](https://hub.docker.com/r/vitive/gilmok) on Docker Hub (linux/amd64 · linux/arm64).
 
-### docker compose (Linux · macOS · Windows)
+### Simplest — one file
+
+```bash
+mkdir gilmok && cd gilmok
+curl -fsSLO https://github.com/redstar-programmer/gilmok/releases/latest/download/docker-compose.yml
+docker compose up -d
+```
+
+No `.env` needed. It starts empty: Quick setup can install Caddy, Authelia and CrowdSec for you, or uncomment the marked lines to manage the Caddy / Authelia you already run. The file is [`deploy/docker-compose.sample.yml`](deploy/docker-compose.sample.yml) and is attached to every release.
+
+### docker compose + .env (folders and names for your setup)
 
 ```bash
 mkdir -p ~/gilmok/secrets && cd ~/gilmok

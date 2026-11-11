@@ -1,0 +1,55 @@
+# Gilmok — minimal docker-compose.yml (no .env needed)
+#
+#   mkdir gilmok && cd gilmok
+#   (save this file as docker-compose.yml)
+#   docker compose up -d
+#   → open http://127.0.0.1:8088 on this server: choose the language, sign in with admin / admin,
+#     create your own administrator, then "Quick setup".
+#
+# As is, Gilmok starts empty: Quick setup can install Caddy, Authelia and CrowdSec as sibling
+# containers for you, and the Cloudflare API token is entered in the UI.
+# To manage a Caddy / Authelia you already run, uncomment the marked lines below.
+#
+# 길목 — .env 없이 쓰는 최소 compose 파일. 그대로 띄우면 빈 상태로 시작하고, 「빠른 설정」에서
+# Caddy·Authelia·CrowdSec을 새로 설치하거나 Cloudflare 토큰을 화면에서 넣을 수 있습니다.
+# 이미 쓰는 Caddy·Authelia를 관리하려면 아래 (existing …) 줄의 주석을 푸세요.
+name: gilmok
+
+services:
+  gilmok:
+    image: vitive/gilmok:latest          # pin a version for reproducible installs, e.g. vitive/gilmok:0.1.1
+    container_name: gilmok
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8088:8080"            # admin UI on this server only — do not expose it to the internet
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      TZ: Asia/Seoul                     # your time zone (UTC if omitted)
+      # GM_LANG: ko                      # ko | en — skip the language question on the first visit
+      # GM_DOMAIN: example.com           # first-start default; can be set in the UI
+
+      # (existing Caddy) — container name and the Caddyfile as mounted below
+      # GM_CADDY_CONTAINER: caddy
+      # GM_CADDYFILE: /stacks/caddy/Caddyfile
+      # (existing Authelia)
+      # GM_AUTHELIA_CONTAINER: authelia
+      # GM_AUTHELIA_CONFIG: /stacks/authelia-config/configuration.yml
+      # GM_AUTHELIA_USERS: /stacks/authelia-config/users_database.yml
+    volumes:
+      - ./data:/data                                   # settings, logs, backups, installed stacks
+      - /var/run/docker.sock:/var/run/docker.sock      # validate / reload / install containers
+      # (existing Caddy) the folder with its Caddyfile and compose file
+      # - /path/to/caddy:/stacks/caddy
+      # (existing Authelia) the config folder (configuration.yml, users_database.yml) and its compose folder
+      # - /path/to/authelia/config:/stacks/authelia-config
+      # - /path/to/authelia:/stacks/authelia:ro
+    logging:
+      options: { max-size: "10m", max-file: "3" }
+    # (existing Caddy) join the Docker network your Caddy is on, so it can reach Gilmok and its services
+    # networks: [proxy]
+
+# networks:
+#   proxy:
+#     name: reverseproxy                 # the network your Caddy uses
+#     external: true

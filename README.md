@@ -145,7 +145,17 @@ flowchart TD
 
 이미지는 Docker Hub의 [`vitive/gilmok`](https://hub.docker.com/r/vitive/gilmok)입니다 (linux/amd64 · linux/arm64).
 
-### docker compose (리눅스 · macOS · Windows 공통)
+### 가장 간단하게 — 파일 하나
+
+```bash
+mkdir gilmok && cd gilmok
+curl -fsSLO https://github.com/redstar-programmer/gilmok/releases/latest/download/docker-compose.yml
+docker compose up -d
+```
+
+`.env` 없이 동작합니다. 빈 상태로 시작해 「빠른 설정」에서 Caddy·Authelia·CrowdSec을 새로 설치하거나, 파일 안의 주석을 풀어 이미 쓰는 Caddy·Authelia에 연결합니다. 이 파일은 저장소의 [`deploy/docker-compose.sample.yml`](deploy/docker-compose.sample.yml)과 같고, 릴리스마다 첨부됩니다.
+
+### docker compose + .env (폴더·이름을 환경에 맞게)
 
 ```bash
 mkdir -p ~/gilmok/secrets && cd ~/gilmok
