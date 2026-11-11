@@ -1867,7 +1867,58 @@ function containerPicker(input) {
 function filePicker(input, label) {
   const b = h('button', { type: 'button', class: 'btn sm ghost fp-btn', title: '길목이 볼 수 있는 폴더에서 파일을 고릅니다' }, icon('folder'), '찾아보기…');
   b.disabled = typeof can === 'function' && !can('system');
+  b.addEventListener('click', () => browseServerFile(input, label));
+  return b;
+}
+
+/**
+ * 「Caddyfile 가져오기…」 next to the Caddyfile path: either pick the file on this server (sets the
+ * path Gilmok reads and writes) or pick one on your own PC (read in the browser and imported into
+ * the service list and base configuration — the path is not changed).
+ * onImported(result) runs after a PC import (e.g. quick setup skips its own import then).
+ */
+function caddyfilePicker(input, label, onImported) {
+  const b = h('button', { type: 'button', class: 'btn sm ghost fp-btn', title: '서버에서 경로를 고르거나 내 PC의 Caddyfile을 읽어 서비스를 만듭니다' }, icon('download'), 'Caddyfile 가져오기…');
+  b.disabled = typeof can === 'function' && !can('config');
   b.addEventListener('click', () => {
+    const srv = h('button', { type: 'button', class: 'choice-btn' }, icon('folder'),
+      h('span', null, h('b', null, '이 서버에서 찾기'), h('small', null, '길목이 볼 수 있는 폴더(마운트한 폴더)에서 Caddyfile을 골라 경로로 씁니다. 길목이 이 파일을 읽고, 적용할 때 고쳐 씁니다.')));
+    const pc = h('button', { type: 'button', class: 'choice-btn' }, icon('upload'),
+      h('span', null, h('b', null, '내 PC에서 고르기'), h('small', null, '지금 쓰는 컴퓨터의 Caddyfile을 골라 서비스 목록과 기본 골격(전역 옵션·스니펫)을 만듭니다. 경로는 바뀌지 않습니다 — 적용하려면 서버에 있는 실제 파일 경로가 필요합니다.')));
+    srv.disabled = typeof can === 'function' && !can('system');
+    if (srv.disabled) srv.title = '「연결·시스템」 권한이 필요합니다';
+    const close = h('button', { type: 'button', class: 'btn ghost' }, '닫기');
+    const d = openDialog({ title: 'Caddyfile 가져오기', body: h('div', { class: 'stack choice-list' }, srv, pc), footer: [close] });
+    close.addEventListener('click', () => d.close());
+    srv.addEventListener('click', () => { d.close(); browseServerFile(input, label); });
+    pc.addEventListener('click', async () => {
+      const file = await pickLocalText();
+      if (!file) return;
+      d.close();
+      const n = ((S.state && S.state.services) || []).length;
+      const ok = await confirmDialog({
+        title: `${file.name} 가져오기`,
+        message: n
+          ? `내 PC의 ${file.name} 을(를) 읽어 서비스 목록과 Caddy 기본 골격을 새로 만듭니다.\n\n지금 있는 서비스 ${n}개는 모두 대체됩니다.\n(파일은 서버에 저장되지 않고, 실제 Caddyfile도 바뀌지 않습니다)`
+          : `내 PC의 ${file.name} 을(를) 읽어 서비스 목록과 Caddy 기본 골격을 새로 만듭니다.\n(파일은 서버에 저장되지 않고, 실제 Caddyfile도 바뀌지 않습니다)`,
+        okText: '가져오기', danger: n > 0,
+      });
+      if (!ok) return;
+      try {
+        const res = await busy(b, () => api('POST', '/api/import', file));
+        S.dns = null;
+        await refreshState();
+        toast(`서비스 ${res.imported}개를 가져왔습니다 — 적용 전에 미리보기로 확인하세요`);
+        if ((res.warnings || []).length) toast(res.warnings.slice(0, 3).join(' / '), 'warn', 9000);
+        if (onImported) onImported(res); else renderPanel();
+      } catch (ex) { toast(`가져오기 실패: ${ex.message}`, 'err', 9000); }
+    });
+  });
+  return b;
+}
+
+function browseServerFile(input, label) {
+  {
     const where = h('div', { class: 'fp-path mono' });
     const list = h('ul', { class: 'fp-list', role: 'listbox', 'aria-label': label });
     const note = h('div');
@@ -1906,8 +1957,7 @@ function filePicker(input, label) {
       if (first) first.focus();
     };
     go(input.value.trim());
-  });
-  return b;
+  }
 }
 
 /** let the user pick a Caddyfile on their own PC (read in the browser; the import only reads it) */
@@ -1987,6 +2037,7 @@ function settingsFields(defs) {
     const fl = field(f.label, el, f.hint);
     if (f.picker === 'container') fl.append(containerPicker(el));
     if (f.picker === 'file') fl.append(filePicker(el, f.label));
+    if (f.picker === 'caddyfile') fl.append(caddyfilePicker(el, f.label));
     return fl;
   });
   els.forEach((el, i) => { if (defs[i].wide && el.classList) el.classList.add('span-all'); });
@@ -2276,7 +2327,7 @@ function renderCaddy(panel) {
     { key: 'caddyContainer', label: 'Caddy 컨테이너', mono: true, hint: 'docker ps 에 보이는 이름', picker: 'container' },
     { key: 'caddyAdmin', label: 'Caddy 관리 API 주소', mono: true, placeholder: 'http://host.docker.internal:2019', hint: '길목에서 접속할 수 있는 주소' },
     { key: 'caddyBin', label: 'caddy 실행 파일', mono: true, placeholder: 'C:\\Caddy\\caddy.exe', hint: 'PATH에 있으면 caddy' },
-    { key: 'caddyfilePath', label: 'Caddyfile 경로 — 길목이 보는 위치', mono: true, picker: 'file', hint: '길목이 읽고 쓰는 파일 (예: /stacks/caddy/Caddyfile)' },
+    { key: 'caddyfilePath', label: 'Caddyfile 경로 — 길목이 보는 위치', mono: true, picker: 'caddyfile', hint: '길목이 읽고 쓰는 파일 (예: /stacks/caddy/Caddyfile)' },
     { key: 'caddyfileInCtr', label: 'Caddyfile 경로 — Caddy 컨테이너 안', mono: true, hint: 'caddy reload 가 읽는 파일 (보통 /etc/caddy/Caddyfile)' },
   ], { actions: [conn.btn], extra: modeHelp, onSaved: () => conn.run(true) });
   {

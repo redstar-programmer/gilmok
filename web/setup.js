@@ -122,7 +122,8 @@ function setupInput(key, label, value, opts = {}) {
   const f = field(label, el, opts.hint);
   if (dl) f.append(dl);
   if (opts.container) f.append(containerPicker(el));
-  if (opts.file) f.append(filePicker(el, label));
+  if (opts.file === 'caddyfile') f.append(caddyfilePicker(el, label, opts.onImported));
+  else if (opts.file) f.append(filePicker(el, label));
   if (opts.found) f.append(h('small', { class: 'setup-found' }, opts.found));
   f.dataset.key = key;
   return { f, el };
@@ -288,7 +289,7 @@ async function openQuickSetup() {
     domain: setupInput('domain', '도메인', sg.domain || st.domain, { placeholder: '예: example.com', hint: '모든 서비스 주소의 기준입니다. 나중에 정해도 되지만, 정하기 전에는 「적용」이 막힙니다.', found: sg.domain ? 'Caddyfile 사이트 주소에서 알아냄' : '' }),
     tailscaleIp: setupInput('tailscaleIp', 'Tailscale IP', sg.tailscaleIp || st.tailscaleIp, { placeholder: '예: 100.64.0.10', hint: '사설 전용 서비스의 DNS 값 — 이 서버의 Tailscale 주소(tailscale ip -4)', found: sg.tailscaleIp ? `찾음 — ${sg.tailscaleSrc || 'Caddyfile'}` : '' }),
     caddyContainer: setupInput('caddyContainer', 'Caddy 컨테이너', sg.caddyContainer || st.caddyContainer, { container: true, found: foundText(det, 'caddy') }),
-    caddyfilePath: setupInput('caddyfilePath', 'Caddyfile 경로 (길목이 보는 위치)', sg.caddyfilePath || st.caddyfilePath, { list: files.caddyfile, file: true, found: (files.caddyfile || []).length ? `찾음: ${files.caddyfile.length}개` : '찾지 못함 — 길목 컨테이너에 Caddy 폴더를 마운트했는지 확인하세요' }),
+    caddyfilePath: setupInput('caddyfilePath', 'Caddyfile 경로 (길목이 보는 위치)', sg.caddyfilePath || st.caddyfilePath, { list: files.caddyfile, file: 'caddyfile', onImported: () => { imp.dataset.pc = '1'; imp.input.checked = false; imp.hidden = true; }, found: (files.caddyfile || []).length ? `찾음: ${files.caddyfile.length}개` : '찾지 못함 — 길목 컨테이너에 Caddy 폴더를 마운트했는지 확인하세요' }),
     autheliaContainer: setupInput('autheliaContainer', 'Authelia 컨테이너', sg.autheliaContainer || st.autheliaContainer, { container: true, found: foundText(det, 'authelia') }),
     autheliaConfig: setupInput('autheliaConfig', 'configuration.yml', sg.autheliaConfig || st.autheliaConfig, { list: files.autheliaConfig, file: true }),
     autheliaUsers: setupInput('autheliaUsers', 'users_database.yml', sg.autheliaUsers || st.autheliaUsers, { list: files.autheliaUsers, file: true }),
@@ -345,7 +346,7 @@ async function openQuickSetup() {
   const sync = () => {
     fields.tailscaleIp.f.hidden = !sel.tailscale;
     for (const k of STACKED) compBoxes[k].el.hidden = !sel[k];
-    imp.hidden = !sel.caddy || mode.caddy !== 'connect' || installed.caddy;
+    imp.hidden = !sel.caddy || mode.caddy !== 'connect' || installed.caddy || imp.dataset.pc === '1'; // already imported from a PC file
     if (csKeyMk) csKeyMk.hidden = mode.crowdsec !== 'connect';
     tokBox.hidden = !sel.cloudflare || !!det.cfToken;
     csBox.hidden = !sel.crowdsec;
@@ -605,7 +606,7 @@ async function openSetupWizard() {
         { key: 'caddyContainer', label: 'Caddy 컨테이너', mono: true, picker: 'container' },
         { key: 'caddyAdmin', label: 'Caddy 관리 API 주소', mono: true, placeholder: 'http://host.docker.internal:2019' },
         { key: 'caddyBin', label: 'caddy 실행 파일', mono: true, placeholder: '예: C:\\Caddy\\caddy.exe' },
-        { key: 'caddyfilePath', label: 'Caddyfile 경로 — 길목이 보는 위치', mono: true, picker: 'file' },
+        { key: 'caddyfilePath', label: 'Caddyfile 경로 — 길목이 보는 위치', mono: true, picker: 'caddyfile' },
         { key: 'caddyfileInCtr', label: 'Caddyfile 경로 — Caddy 컨테이너 안', mono: true },
       ]);
       for (const k of ['caddyContainer', 'caddyfilePath']) if (fresh && !managedNow.caddy && sg[k]) f.inputs[k].value = sg[k];

@@ -1252,3 +1252,11 @@ html:not([lang="ko"]) .brand-en { display: none; }
 .open-link:hover, .open-link:focus-visible { color: var(--accent); border-color: var(--accent); }
 .open-link.local { font-family: var(--mono); }
 .row.tight { gap: 6px; flex-wrap: wrap; }
+/* two big choices in a small dialog (Caddyfile 가져오기) */
+.choice-list { gap: 10px; }
+.choice-btn { display: flex; gap: 12px; align-items: flex-start; width: 100%; padding: 14px 16px; text-align: left; border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgb(var(--panel) / .5); color: var(--fg); font: inherit; cursor: pointer; }
+.choice-btn:hover:not(:disabled), .choice-btn:focus-visible { border-color: var(--accent); outline: none; }
+.choice-btn:disabled { opacity: .5; cursor: not-allowed; }
+.choice-btn > .icon { flex: none; width: 20px; height: 20px; margin-top: 2px; color: var(--accent); }
+.choice-btn > span { display: flex; flex-direction: column; gap: 4px; }
+.choice-btn small { color: var(--fg-2); line-height: 1.5; }
