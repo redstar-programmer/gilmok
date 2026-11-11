@@ -1260,3 +1260,8 @@ html:not([lang="ko"]) .brand-en { display: none; }
 .choice-btn > .icon { flex: none; width: 20px; height: 20px; margin-top: 2px; color: var(--accent); }
 .choice-btn > span { display: flex; flex-direction: column; gap: 4px; }
 .choice-btn small { color: var(--fg-2); line-height: 1.5; }
+/* network advice under the install dialogs' network field */
+.net-advice:empty { display: none; }
+.net-advice { margin-top: 6px; }
+.net-advice .callout .btn { margin-top: 6px; align-self: flex-start; }
+.ok-text { color: var(--t-ok); }

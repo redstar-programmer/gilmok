@@ -189,9 +189,63 @@ function stackInstallFields(name, defaultContainer, o = {}) {
   const net = h('input', { type: 'text', class: 'mono', autocomplete: 'off', spellcheck: 'false', placeholder: '비우면 자동' });
   const netList = h('datalist', { id: uid('nets') });
   net.setAttribute('list', netList.id);
-  api('GET', '/api/docker/networks').then((r) => netList.replaceChildren(...(r.networks || []).map((n) => h('option', { value: n })))).catch(() => {});
-  const netField = field('Docker 네트워크', net, '비우면 길목이 붙어 있는 사용자 정의 네트워크(없으면 gilmok-net)를 씁니다. 다른 서비스들과 같은 네트워크(예: reverseproxy)를 쓰려면 그 이름을 넣으세요 — 없으면 만들고 길목도 연결합니다. bridge·host는 컨테이너 이름으로 찾아갈 수 없어 안 됩니다.');
-  netField.append(netList);
+  const netField = field('Docker 네트워크', net, 'Caddy와 서비스 컨테이너는 같은 네트워크에 있어야 컨테이너 이름으로 서로 찾아갑니다. 없는 이름이면 새로 만들고, 길목도 이 네트워크에 연결합니다 (bridge·host는 이름으로 찾을 수 없어 안 됨).');
+  const netAdvice = h('div', { class: 'net-advice', 'aria-live': 'polite' });
+  netField.append(netList, netAdvice);
+  // recommend the network that makes this work, and warn when the choice would split Caddy from it
+  let nets = null; // { networks, counts, caddy: {container, networks}, self }
+  const useBtn = (v) => {
+    const b = h('button', { type: 'button', class: 'btn sm' }, `${v} 로 바꾸기`);
+    b.addEventListener('click', () => { net.value = v; syncNet(); });
+    return b;
+  };
+  const syncNet = () => {
+    if (!nets) return;
+    const v = net.value.trim();
+    const counts = nets.counts || {};
+    if (name === 'caddy') {
+      // Caddy goes where the service containers already are
+      const best = (nets.networks || []).slice().sort((a, b) => (counts[b] || 0) - (counts[a] || 0))[0];
+      if (!best || !(counts[best] > 0)) { fill(netAdvice, h('p', { class: 'hint' }, '아직 서비스 컨테이너가 있는 네트워크가 없습니다 — 비워 두면 길목이 쓰는 네트워크에 설치합니다.')); return; }
+      if (!v) {
+        fill(netAdvice, callout('', h('b', null, `추천: ${best}`), h('span', { class: 'small' }, `컨테이너 ${counts[best]}개가 있는 네트워크입니다. 서비스 컨테이너들과 같은 네트워크여야 Caddy가 이름(예: 컨테이너:포트)으로 찾아갑니다.`), useBtn(best)));
+      } else if (v !== best && (counts[v] || 0) < counts[best]) {
+        fill(netAdvice, callout('warn', h('b', null, `${v} 에는 컨테이너가 ${counts[v] || 0}개뿐입니다`), h('span', { class: 'small' }, `서비스 컨테이너가 ${best} 에 있다면 Caddy가 그 컨테이너들을 찾지 못합니다 — 대상을 host.docker.internal:포트로 바꾸거나 컨테이너를 이 네트워크에 연결해야 합니다.`), useBtn(best)));
+      } else {
+        fill(netAdvice, h('p', { class: 'hint ok-text' }, `✓ 컨테이너 ${counts[v] || 0}개가 있는 네트워크입니다.`));
+      }
+      return;
+    }
+    // Authelia / CrowdSec: Caddy must reach them by name → Caddy's network
+    const planned = o.caddyNet ? o.caddyNet() : undefined; // quick setup: the network typed for the Caddy being installed
+    const caddyNets = planned !== undefined ? (planned ? [planned] : []) : ((nets.caddy && nets.caddy.networks) || []);
+    const who = planned !== undefined ? '함께 설치하는 Caddy' : `Caddy(${(nets.caddy && nets.caddy.container) || 'caddy'})`;
+    if (!caddyNets.length) {
+      fill(netAdvice, h('p', { class: 'hint' }, planned !== undefined
+        ? '비워 두면 함께 설치하는 Caddy와 같은 네트워크에 설치합니다 (권장).'
+        : '아직 Caddy 컨테이너가 없습니다 — 나중에 Caddy를 설치할 때 같은 네트워크를 고르세요.'));
+      return;
+    }
+    const rec = caddyNets.find((x) => (nets.self || []).includes(x)) || caddyNets[0];
+    if (!v) {
+      fill(netAdvice, h('p', { class: 'hint ok-text' }, `비워 두면 ${who}와 같은 네트워크 ${rec} 에 설치합니다 (권장).`));
+    } else if (caddyNets.includes(v)) {
+      fill(netAdvice, h('p', { class: 'hint ok-text' }, `✓ ${who}와 같은 네트워크입니다.`));
+    } else {
+      fill(netAdvice, callout('warn', h('b', null, `${who}는 ${v} 에 없습니다`),
+        h('span', { class: 'small' }, name === 'authelia'
+          ? 'Caddy가 Authelia를 이름으로 찾지 못해, 로그인 포털과 Authelia로 보호한 모든 사이트가 502가 됩니다.'
+          : '길목·Caddy와 다른 네트워크면 CrowdSec LAPI 연결이 안 될 수 있습니다.'),
+        useBtn(rec)));
+    }
+  };
+  net.addEventListener('input', syncNet);
+  api('GET', '/api/docker/networks').then((r) => {
+    nets = r;
+    netList.replaceChildren(...(r.networks || []).map((n) => h('option', { value: n }, r.counts && r.counts[n] != null ? `컨테이너 ${r.counts[n]}개` : '')));
+    syncNet();
+  }).catch(() => {});
+  if (o.onCaddyNet) o.onCaddyNet(syncNet); // quick setup: re-check when the Caddy network field changes
   const fields = [h('div', { class: 'grid-2' }, field('컨테이너 이름', ctr, '영문·숫자·_.- (이미 같은 이름이 있으면 설치하지 않습니다)'), netField)];
   const read = { container: () => ctr.value.trim(), network: () => net.value.trim() };
   if (name === 'caddy') {
@@ -257,7 +311,7 @@ function stackInstallFields(name, defaultContainer, o = {}) {
     delete out._pwCheck;
     return out;
   };
-  return { fields, opts, pwOk: () => !(read._pwCheck && read._pwCheck()) };
+  return { fields, opts, pwOk: () => !(read._pwCheck && read._pwCheck()), network: () => net.value.trim(), netInput: net };
 }
 
 /** install dialog: options → preflight → install (background job with a live log) */

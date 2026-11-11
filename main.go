@@ -27,7 +27,7 @@ import (
 //go:embed web
 var webFS embed.FS
 
-var version = "0.1.3"
+var version = "0.1.4"
 
 func main() {
 	dataDir := env("GM_DATA", "/data")
@@ -48,6 +48,7 @@ func main() {
 	app.detectSelf()
 	app.seedGroups() // groups already used by services / users become the registered list (once)
 	app.inferComponents()
+	app.fixManagedCaddyACME() // installs made without a token by older versions
 	app.logEvent("system", "info", "gilmok.start", "", "길목 시작 v"+version, nil)
 	app.cs.kick = make(chan struct{}, 1)
 	app.mon = newMonitor()

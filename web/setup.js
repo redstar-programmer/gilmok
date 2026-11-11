@@ -298,11 +298,17 @@ async function openQuickSetup() {
   };
   const owner = { tailscaleIp: 'tailscale', caddyContainer: 'caddy', caddyfilePath: 'caddy', autheliaContainer: 'authelia', autheliaConfig: 'authelia', autheliaUsers: 'authelia', crowdsecContainer: 'crowdsec', crowdsecLapi: 'crowdsec' };
   const inst = {};
+  const netWatchers = []; // re-run the network advice when the Caddy install mode changes
   const compBoxes = {};
   const domainNow = () => validDomain(fields.domain.el.value).v;
   for (const k of STACKED) {
     const c = COMPONENTS.find((x) => x.key === k);
-    inst[k] = stackInstallFields(k, (stacks[k] && stacks[k].defaultContainer) || `gilmok-${k}`, { followCaddy: true, domain: domainNow });
+    inst[k] = stackInstallFields(k, (stacks[k] && stacks[k].defaultContainer) || `gilmok-${k}`, {
+      followCaddy: true, domain: domainNow,
+      // Authelia / CrowdSec follow the network of a Caddy installed in the same run
+      caddyNet: k === 'caddy' ? undefined : () => (mode.caddy === 'install' && !installed.caddy && inst.caddy ? inst.caddy.network() : undefined),
+      onCaddyNet: k === 'caddy' ? undefined : (fn) => { if (inst.caddy) { inst.caddy.netInput.addEventListener('input', fn); netWatchers.push(fn); } },
+    });
     const connBox = h('div', { class: 'grid-2' }, Object.entries(owner).filter(([, comp]) => comp === k).map(([f]) => fields[f].f));
     const instBox = h('div', { class: 'stack' }, inst[k].fields);
     const seg = segmented(uid(`m-${k}`), `${c.name} 준비 방식`, [
@@ -319,7 +325,7 @@ async function openQuickSetup() {
           : !det.docker ? 'Docker에 연결하지 못해 설치는 고를 수 없습니다.' : '';
       syncAll();
     };
-    seg.onChange(paint);
+    seg.onChange(() => { paint(); for (const fn of netWatchers) fn(); });
     compBoxes[k] = { el: h('div', { class: 'section-box comp-setup' }, h('h3', null, c.name), seg, note, connBox, instBox), paint };
   }
   let syncAll = () => {};
@@ -545,9 +551,10 @@ async function openSetupWizard() {
   const steps = () => [
     { id: 'comp', title: '구성요소' },
     { id: 'domain', title: '도메인' },
+    // Cloudflare before Caddy: a Caddy Gilmok installs gets its certificates by DNS only if the token exists by then
+    sel.cloudflare && { id: 'cloudflare', title: 'Cloudflare' },
     sel.caddy && { id: 'caddy', title: 'Caddy' },
     sel.authelia && { id: 'authelia', title: 'Authelia' },
-    sel.cloudflare && { id: 'cloudflare', title: 'Cloudflare' },
     sel.crowdsec && { id: 'crowdsec', title: 'CrowdSec' },
     sel.caddy && !managedNow.caddy && { id: 'import', title: '가져오기' },
     { id: 'done', title: '확인' },

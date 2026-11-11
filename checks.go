@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -202,6 +204,21 @@ func (a *App) checkCaddy() CheckResult {
 		default:
 			r.add("waf", "WAF 모듈 (Coraza)", "skip", "이 Caddy 이미지에는 Coraza가 없습니다 (WAF를 쓰려면 deploy/caddy/Dockerfile)")
 		}
+		// Proxied sites: Cloudflare answers HTTP-01 / TLS-ALPN itself, so only the DNS challenge (or
+		// certificate files) can get their certificates — otherwise every Proxied site fails with 525
+		if st.UseCloudflare && err == nil {
+			proxied := 0
+			for _, s := range a.store.Snapshot().Services {
+				if s.Enabled && !s.DNSOnly && s.Exposure == ExposurePublic && s.Proxied {
+					proxied++
+				}
+			}
+			if proxied > 0 && !reCertConfigured.MatchString(string(b)) {
+				r.add("acme", "인증서 발급 방식", "fail", fmt.Sprintf("Proxied 사이트 %d개의 인증서를 받을 수 없습니다 — Cloudflare를 거치면 HTTP 인증이 막혀 525가 납니다. Caddy 탭 › 전역 설정 › 기본 골격의 전역 옵션에 acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN} 를 넣고 적용하세요 (Caddy 컨테이너에 CLOUDFLARE_API_TOKEN 필요)", proxied))
+			} else if proxied > 0 {
+				r.add("acme", "인증서 발급 방식", "ok", "DNS 인증 또는 인증서 파일")
+			}
+		}
 		if docker {
 			if st.UseCloudflare {
 				tokenCheck(&r, st.CaddyContainer)
@@ -219,6 +236,28 @@ func (a *App) checkAuthelia() CheckResult {
 	st := a.store.Snapshot().Settings
 	r := CheckResult{Target: "authelia"}
 	running := containerChecks(&r, st.AutheliaCtr, "authelia", "--version")
+	// Caddy reaches Authelia by container name (forward_auth / the portal site): only on a shared network
+	if running && st.UseCaddy && caddyMode(st) == "docker" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cn, an := ctrNetworks(ctx, st.CaddyContainer), ctrNetworks(ctx, st.AutheliaCtr)
+		cancel()
+		shared := ""
+		for _, n := range an {
+			for _, m := range cn {
+				if n == m && shared == "" {
+					shared = n
+				}
+			}
+		}
+		switch {
+		case len(cn) == 0:
+			// Caddy not running / not found: the Caddy check says so
+		case shared != "":
+			r.add("net", "Caddy ↔ Authelia 네트워크", "ok", shared)
+		default:
+			r.add("net", "Caddy ↔ Authelia 네트워크", "fail", fmt.Sprintf("Caddy(%s: %s)와 Authelia(%s: %s)가 다른 Docker 네트워크에 있어 Caddy가 Authelia를 찾지 못합니다 (502). 예: docker network connect %s %s — 다시 만들어져도 유지하려면 Authelia compose의 네트워크를 %s 로", st.CaddyContainer, strings.Join(cn, ", "), st.AutheliaCtr, strings.Join(an, ", "), cn[0], st.AutheliaCtr, cn[0]))
+		}
+	}
 
 	cfg, err := os.ReadFile(st.AutheliaConfig)
 	if err != nil {
@@ -373,4 +412,27 @@ func (a *App) postValidate(w http.ResponseWriter, r *http.Request) {
 		res["error"] = err.Error()
 	}
 	writeJSON(w, 200, res)
+}
+
+// ctrNetworks: the user-defined Docker networks a container is on (sorted).
+func ctrNetworks(ctx context.Context, ctr string) []string {
+	if ctr == "" {
+		return nil
+	}
+	out, err := docker(ctx, nil, nil, "inspect", "-f", "{{json .NetworkSettings.Networks}}", ctr)
+	if err != nil {
+		return nil
+	}
+	var m map[string]any
+	if json.Unmarshal([]byte(strings.TrimSpace(out)), &m) != nil {
+		return nil
+	}
+	var names []string
+	for n := range m {
+		if n != "bridge" && n != "host" && n != "none" {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+	return names
 }

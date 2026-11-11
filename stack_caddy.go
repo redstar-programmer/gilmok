@@ -21,6 +21,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -267,13 +268,76 @@ func adoptCaddyStack(d *Data, rec *ManagedStack) {
 	st.CaddyStackDir, st.CaddyService = "", "caddy"
 }
 
+// reCertConfigured: the Caddyfile already says how certificates are obtained (DNS challenge,
+// internal CA or certificate files) — then nothing needs adding.
+var reCertConfigured = regexp.MustCompile(`(?m)acme_dns|\bdns\s+cloudflare|local_certs|\btls\s+internal|\btls\s+\S+\.(pem|crt)\b`)
+
+// ensureAcmeDNS adds `acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}` to the global options of a base
+// configuration that has no certificate method yet. Sites behind the Cloudflare proxy cannot pass the
+// HTTP-01 / TLS-ALPN challenges (Cloudflare answers them), so they need the DNS challenge.
+func ensureAcmeDNS(base string) (string, bool) {
+	if reCertConfigured.MatchString(base) {
+		return base, false
+	}
+	const line = "\tacme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}"
+	lines := strings.Split(base, "\n")
+	for i, l := range lines {
+		t := strings.TrimSpace(l)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		if t == "{" { // the global options block comes first
+			out := append([]string{}, lines[:i+1]...)
+			out = append(out, line)
+			out = append(out, lines[i+1:]...)
+			return strings.Join(out, "\n"), true
+		}
+		break
+	}
+	// no global block: put one at the top (after leading comments)
+	i := 0
+	for i < len(lines) && (strings.TrimSpace(lines[i]) == "" || strings.HasPrefix(strings.TrimSpace(lines[i]), "#")) {
+		i++
+	}
+	out := append([]string{}, lines[:i]...)
+	out = append(out, "{", line, "}", "")
+	out = append(out, lines[i:]...)
+	return strings.Join(out, "\n"), true
+}
+
 // caddyTokenChanged: the Cloudflare token was saved / deleted — a managed Caddy gets the new
 // .env and is recreated so DNS-01 renewals keep working.
+// fixManagedCaddyACME: a managed Caddy installed before the Cloudflare token existed was set up for
+// HTTP challenges, which fail behind the Cloudflare proxy (every Proxied site → 525). Once there is a
+// token, switch its base configuration to the DNS challenge (pending until 「적용」). Runs when the
+// token changes and at startup (installs made by older versions).
+func (a *App) fixManagedCaddyACME() {
+	if cfToken() == "" || a.store.Snapshot().Stacks["caddy"] == nil {
+		return
+	}
+	changed := false
+	_ = a.store.Update(func(d *Data) error {
+		if !d.Settings.UseCloudflare {
+			return nil
+		}
+		if nb, ok := ensureAcmeDNS(d.Settings.CaddyBase); ok {
+			d.Settings.CaddyBase = nb
+			d.markDirty("관리형 Caddy: 인증서를 Cloudflare DNS로 받도록 전역 옵션에 acme_dns 추가")
+			changed = true
+		}
+		return nil
+	})
+	if changed {
+		a.logEvent("system", "info", "stack.token", "caddy", "Cloudflare 토큰이 있어 관리형 Caddy의 인증서 발급을 DNS 방식(acme_dns)으로 바꿨습니다 — 「적용」하면 반영됩니다", nil)
+	}
+}
+
 func (a *App) caddyTokenChanged(r interface{ Context() context.Context }) {
 	rec := a.store.Snapshot().Stacks["caddy"]
 	if rec == nil {
 		return
 	}
+	a.fixManagedCaddyACME()
 	if err := writeCaddyEnv(rec.Dir, cfToken()); err != nil {
 		a.logEvent("system", "error", "stack.token", "caddy", "관리형 Caddy의 토큰 파일을 고치지 못했습니다: "+err.Error(), nil)
 		return

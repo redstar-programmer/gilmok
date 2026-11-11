@@ -603,3 +603,25 @@ func TestComposeCheckEndpoint(t *testing.T) {
 		}
 	}
 }
+
+// A managed Caddy installed before the Cloudflare token existed must switch to the DNS challenge
+// (HTTP-01 / TLS-ALPN fail behind the Cloudflare proxy → every Proxied site 525).
+func TestEnsureAcmeDNS(t *testing.T) {
+	base := "# 길목이 설치한 Caddy\n{\n\tservers {\n\t\ttrusted_proxies static 1.2.3.4/32\n\t}\n}\n\n(cf_only) {\n}\n"
+	nb, ok := ensureAcmeDNS(base)
+	if !ok || !strings.Contains(nb, "{\n\tacme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}\n\tservers {") {
+		t.Fatalf("into the global block: %v\n%s", ok, nb)
+	}
+	if _, again := ensureAcmeDNS(nb); again {
+		t.Fatal("must not add it twice")
+	}
+	nb, ok = ensureAcmeDNS("# c\n(cf_only) {\n}\n")
+	if !ok || !strings.HasPrefix(nb, "# c\n{\n\tacme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}\n}\n") {
+		t.Fatalf("no global block: %s", nb)
+	}
+	for _, keep := range []string{"{\n\tlocal_certs\n}\n", "a.example.com {\n\ttls {\n\t\tdns cloudflare {env.X}\n\t}\n}\n", "{\n\tacme_dns cloudflare x\n}\n"} {
+		if _, ok := ensureAcmeDNS(keep); ok {
+			t.Fatalf("already has a method: %s", keep)
+		}
+	}
+}

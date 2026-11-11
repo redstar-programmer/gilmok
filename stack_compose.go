@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -276,7 +277,29 @@ func (a *App) getDockerNetworks(w http.ResponseWriter, r *http.Request) {
 		list = append(list, n)
 	}
 	sort.Strings(list)
-	writeJSON(w, 200, map[string]any{"networks": list})
+	// for the install dialogs' recommendation: how many containers each network has, and which
+	// networks the Caddy container and Gilmok itself are on
+	counts := map[string]int{}
+	if len(list) > 0 {
+		if out, err := docker(ctx, nil, nil, append([]string{"network", "inspect", "-f", "{{.Name}}|{{len .Containers}}"}, list...)...); err == nil {
+			for _, l := range strings.Split(out, "\n") {
+				if n, c, ok := strings.Cut(strings.TrimSpace(l), "|"); ok {
+					counts[n], _ = strconv.Atoi(c)
+				}
+			}
+		}
+	}
+	d := a.store.Snapshot()
+	caddy := ""
+	if caddyMode(d.Settings) == "docker" {
+		caddy = d.Settings.CaddyContainer
+		if rec := d.Stacks["caddy"]; rec != nil {
+			caddy = rec.Container
+		}
+	}
+	writeJSON(w, 200, map[string]any{"networks": list, "counts": counts,
+		"caddy": map[string]any{"container": caddy, "networks": ctrNetworks(ctx, caddy)},
+		"self":  ctrNetworks(ctx, d.SelfName)})
 }
 
 func firstNonEmpty(v ...string) string {

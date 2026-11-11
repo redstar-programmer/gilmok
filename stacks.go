@@ -247,6 +247,35 @@ func (a *App) stackNetwork(ctx context.Context, log func(string, ...any), want s
 	return def, nil
 }
 
+// caddyNetwork: a user-defined network the Caddy container (Gilmok's managed one, else the configured
+// one) is on — preferring one Gilmok shares. "" when there is no Caddy container yet.
+func (a *App) caddyNetwork(ctx context.Context) string {
+	d := a.store.Snapshot()
+	ctr := d.Settings.CaddyContainer
+	if rec := d.Stacks["caddy"]; rec != nil {
+		ctr = rec.Container
+	}
+	if ctr == "" || caddyMode(d.Settings) != "docker" {
+		return ""
+	}
+	caddy := ctrNetworks(ctx, ctr)
+	if len(caddy) == 0 {
+		return ""
+	}
+	if d.SelfName != "" {
+		mine := map[string]bool{}
+		for _, n := range ctrNetworks(ctx, d.SelfName) {
+			mine[n] = true
+		}
+		for _, n := range caddy {
+			if mine[n] {
+				return n
+			}
+		}
+	}
+	return caddy[0]
+}
+
 // stackCompose runs compose on a stack folder. The project name comes from the file's top-level
 // `name:` (stackProject of the container) — never one fixed name per kind: two Gilmoks on one Docker,
 // or a reinstall under another container name, would otherwise replace each other's containers.
@@ -390,7 +419,16 @@ func (a *App) stackInstall(name string, o map[string]string, log func(string, ..
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	network, err := a.stackNetwork(ctx, log, o["network"])
+	want := o["network"]
+	if want == "" && name != "caddy" {
+		// Caddy must reach it by name: join a network the Caddy container is on (Gilmok's own
+		// networks are sorted alphabetically and may not include Caddy's — e.g. gilmok_default)
+		want = a.caddyNetwork(ctx)
+		if want != "" {
+			log("• 네트워크: Caddy와 같은 %s (Caddy가 이름으로 찾아갈 수 있게)", want)
+		}
+	}
+	network, err := a.stackNetwork(ctx, log, want)
 	if err != nil {
 		return err
 	}
