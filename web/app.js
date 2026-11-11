@@ -2784,6 +2784,16 @@ function cfTokenCard(onChanged) {
       : callout('warn', h('b', null, 'Cloudflare API 토큰이 없습니다.'),
         h('span', { class: 'small' }, '토큰이 없으면 DNS 레코드 동기화·DDNS Updater·WAF 규칙을 건너뜁니다. 아래 방법대로 만들어 붙여넣으세요.')),
     how, form);
+  // the setup wizard's 「다음」: a pasted but not yet saved token is checked and saved, not dropped
+  box.saveIfTyped = async () => {
+    const v = input.value.trim();
+    if (!v) return false;
+    await api('POST', '/api/cloudflare/token', { token: v });
+    input.value = '';
+    toast(`토큰 확인 완료 — ${dom} 존에 접근할 수 있습니다`);
+    await onChanged();
+    return true;
+  };
   return box;
 }
 

@@ -4,9 +4,13 @@ package main
 //
 // Gilmok usually runs in a container, where the host's `tailscale` CLI is out of reach. So it
 // tries, in order, what it can see — and lets the user pick when it cannot be sure:
+//   0. GM_TAILSCALE_IP (install.ps1 reads `tailscale ip -4` on a Windows host and saves it)
 //   1. a local tailscale CLI (Gilmok running on the host itself)            → this machine's IP
 //   2. Tailscale containers on this Docker (`tailscale status --json`)       → the tailnet's devices;
 //      a device whose host name matches this server is suggested, the rest are offered to pick
+//   2b. Tailscale DNS (MagicDNS, 100.100.100.100): Docker Desktop routes the container's traffic
+//      through the host, so a host with Tailscale installed directly (Windows, macOS) still answers
+//      a lookup of this server's device name (?name=…, or the names we can guess)
 //   3. Cloudflare DNS: 100.64/10 values already used by records in the zone (most common)
 //   4. the Caddyfile: 100.64/10 addresses written in it (e.g. `bind`)
 // Read-only; nothing is saved.
@@ -14,9 +18,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -36,6 +44,9 @@ type TSDetect struct {
 	Source  string     `json:"source"`  // how it was found
 	Devices []TSDevice `json:"devices"` // tailnet devices to pick from
 	Tried   []string   `json:"tried"`   // what was tried (shown when nothing was found)
+	// MagicDNS: the Tailscale DNS (100.100.100.100) answers from here, so a device name can be looked up
+	MagicDNS bool   `json:"magicDns"`
+	NameMiss string `json:"nameMiss,omitempty"` // the name asked for was not found
 }
 
 type tsStatus struct {
@@ -61,14 +72,41 @@ func (n tsNode) ip4() string {
 
 // tsLocalStatus: overridable for tests (runs the local tailscale CLI).
 var tsLocalStatus = func(ctx context.Context) ([]byte, error) {
-	return exec.CommandContext(ctx, "tailscale", "status", "--json").Output()
+	bin := "tailscale"
+	if _, err := exec.LookPath(bin); err != nil && runtime.GOOS == "windows" {
+		bin = `C:\Program Files\Tailscale\tailscale.exe` // the installer does not always add it to PATH
+	}
+	return exec.CommandContext(ctx, bin, "status", "--json").Output()
 }
 
+// tsMagicLookup asks the Tailscale DNS (MagicDNS) for a device name. reachable=false when it does not answer.
+var tsMagicLookup = func(ctx context.Context, name string) (ips []string, reachable bool) {
+	r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		d := net.Dialer{Timeout: 2 * time.Second}
+		return d.DialContext(ctx, "udp", "100.100.100.100:53")
+	}}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	addrs, err := r.LookupHost(ctx, name)
+	if err != nil {
+		var de *net.DNSError
+		return nil, errors.As(err, &de) && de.IsNotFound // NXDOMAIN = it answered
+	}
+	return addrs, true
+}
+
+// reTSName: a tailnet device name (or its MagicDNS FQDN)
+var reTSName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,62})(\.[a-z0-9-]{1,63}){0,4}$`)
+
 func (a *App) getTailscaleDetect(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, a.detectTailscale(r.Context()))
+	writeJSON(w, 200, a.detectTailscaleNamed(r.Context(), r.URL.Query().Get("name")))
 }
 
 func (a *App) detectTailscale(parent context.Context) TSDetect {
+	return a.detectTailscaleNamed(parent, "")
+}
+
+func (a *App) detectTailscaleNamed(parent context.Context, askName string) TSDetect {
 	ctx, cancel := context.WithTimeout(parent, 25*time.Second)
 	defer cancel()
 	d := a.store.Snapshot()
@@ -95,6 +133,36 @@ func (a *App) detectTailscale(parent context.Context) TSDetect {
 	}
 	if info, err := docker(ctx, nil, nil, "info", "-f", "{{.Name}}"); err == nil {
 		addName(info)
+	}
+
+	askName = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(askName), "."))
+	if askName != "" && !reTSName.MatchString(askName) {
+		askName = ""
+	}
+
+	// 0. what the installer found on the host (install.ps1 → GM_TAILSCALE_IP)
+	if v := strings.TrimSpace(os.Getenv("GM_TAILSCALE_IP")); v != "" && reTailnetIP.FindString(v) == v && askName == "" {
+		out.Tried = append(out.Tried, "배포 설정 GM_TAILSCALE_IP")
+		suggest(v, "배포 설정 (GM_TAILSCALE_IP)")
+	}
+
+	// a name the user typed: ask MagicDNS first, it is the most direct answer
+	if askName != "" {
+		out.Tried = append(out.Tried, "Tailscale DNS: "+askName)
+		ips, ok := tsMagicLookup(ctx, askName)
+		out.MagicDNS = out.MagicDNS || ok
+		found := ""
+		for _, ip := range ips {
+			if reTailnetIP.FindString(ip) == ip {
+				found = ip
+				break
+			}
+		}
+		if found != "" {
+			suggest(found, "Tailscale DNS ("+askName+")")
+		} else {
+			out.NameMiss = askName
+		}
 	}
 
 	// 1. local CLI
@@ -155,6 +223,38 @@ func (a *App) detectTailscale(parent context.Context) TSDetect {
 		if dv.Match {
 			suggest(dv.IP, "Tailscale 기기 목록 ("+dv.Name+")")
 			break
+		}
+	}
+
+	// 2b. MagicDNS with the names we can guess (a host with Tailscale installed directly)
+	if askName == "" || out.IP == "" {
+		guessed := []string{}
+		for n := range names {
+			if n != "docker-desktop" && !strings.Contains(n, ".") && reTSName.MatchString(n) {
+				guessed = append(guessed, n)
+			}
+		}
+		sort.Strings(guessed)
+		if len(guessed) > 6 {
+			guessed = guessed[:6]
+		}
+		probe := len(guessed) == 0
+		out.Tried = append(out.Tried, "Tailscale DNS (100.100.100.100)")
+		for _, n := range guessed {
+			ips, ok := tsMagicLookup(ctx, n)
+			out.MagicDNS = out.MagicDNS || ok
+			if !ok {
+				break // not reachable: do not wait on every name
+			}
+			for _, ip := range ips {
+				if reTailnetIP.FindString(ip) == ip {
+					suggest(ip, "Tailscale DNS ("+n+")")
+					break
+				}
+			}
+		}
+		if probe && !out.MagicDNS {
+			_, out.MagicDNS = tsMagicLookup(ctx, "gilmok-probe.invalid")
 		}
 	}
 

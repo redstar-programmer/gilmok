@@ -178,7 +178,7 @@ func verifyCrowdSecStack(a *App, ctr string) error {
 			if err := waitHealthy(ctr, since, "Local API listening", time.Until(deadline)); err != nil {
 				return fmt.Errorf("CrowdSec LAPI가 준비되지 않았습니다: %v", err)
 			}
-			return nil
+			return reRegisterBouncer(ctr)
 		}
 		last = oneLine(lastLines(out, 2))
 		if st, _ := ctrStateOf(context.Background(), ctr); st != "running" {
@@ -188,6 +188,23 @@ func verifyCrowdSecStack(a *App, ctr string) error {
 		time.Sleep(3 * time.Second)
 	}
 	return fmt.Errorf("CrowdSec이 3분 안에 준비되지 않았습니다 (바운서 gilmok 없음): %s", last)
+}
+
+// reRegisterBouncer makes the bouncer "gilmok" use Gilmok's current key. The image registers
+// BOUNCER_KEY_gilmok only when the bouncer does not exist yet, so a CrowdSec database kept from an
+// earlier install (e.g. after Gilmok's reset made a new key) would keep rejecting the new key.
+func reRegisterBouncer(ctr string) error {
+	key := csKey()
+	if key == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, _ = docker(ctx, nil, nil, "exec", ctr, "cscli", "bouncers", "delete", "gilmok")
+	if out, err := docker(ctx, nil, nil, "exec", ctr, "cscli", "bouncers", "add", "gilmok", "-k", key); err != nil {
+		return fmt.Errorf("바운서 gilmok 를 길목의 키로 다시 등록하지 못했습니다: %s", oneLine(lastLines(strings.ReplaceAll(out, key, "***"), 2)))
+	}
+	return nil
 }
 
 func adoptCrowdSecStack(d *Data, rec *ManagedStack) {

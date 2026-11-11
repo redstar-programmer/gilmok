@@ -71,10 +71,24 @@ function tsFinder(input) {
   const btn = h('button', { type: 'button', class: 'btn sm' }, 'Tailscale에서 찾기');
   const out = h('div', { class: 'ts-find' });
   const set = (ip) => { input.value = ip; input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); };
-  btn.addEventListener('click', () => busy(btn, async () => {
+  // MagicDNS lookup by this server's device name (Tailscale installed directly on Windows / macOS)
+  const nameRow = (r) => {
+    const name = h('input', { type: 'text', class: 'mono', placeholder: '예: my-nas', autocomplete: 'off', spellcheck: 'false', 'aria-label': '이 서버의 Tailscale 기기 이름' });
+    const go = h('button', { type: 'button', class: 'btn sm' }, '이름으로 찾기');
+    const run = () => { if (name.value.trim()) search(go, name.value.trim()); };
+    go.addEventListener('click', run);
+    name.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); run(); } });
+    return h('div', { class: 'stack tight' },
+      h('small', { class: 'hint' }, r.magicDns
+        ? '이 서버의 Tailscale 기기 이름(관리 콘솔 Machines의 이름)을 넣으면 Tailscale DNS에 물어 주소를 찾습니다.'
+        : 'Tailscale DNS(100.100.100.100)에 닿지 않아 이름으로는 찾을 수 없습니다. MagicDNS가 꺼져 있을 수 있습니다.'),
+      r.magicDns ? h('div', { class: 'row' }, name, go) : null);
+  };
+  const search = (b, askName) => busy(b, async () => {
     try {
-      const r = await api('GET', '/api/tailscale/detect');
+      const r = await api('GET', `/api/tailscale/detect${askName ? `?name=${encodeURIComponent(askName)}` : ''}`);
       const kids = [];
+      if (r.nameMiss) kids.push(h('small', { class: 'form-error' }, `「${r.nameMiss}」 이름의 기기를 Tailscale DNS에서 찾지 못했습니다.`));
       if (r.ip) { set(r.ip); kids.push(h('small', { class: 'setup-found' }, `찾음: ${r.ip} — ${r.source}`)); }
       const devs = r.devices || [];
       if (devs.length) {
@@ -84,10 +98,15 @@ function tsFinder(input) {
         sel.addEventListener('change', () => { if (sel.value) set(sel.value); });
         kids.push(sel);
       }
-      if (!r.ip && !devs.length) kids.push(h('small', { class: 'hint' }, `찾지 못했습니다 (시도: ${(r.tried || []).join(', ')}). 이 서버에서 「tailscale ip -4」를 실행해 나온 100.x 주소를 넣으세요.`));
+      if (!r.ip && !devs.length) {
+        kids.push(h('small', { class: 'hint' }, `찾지 못했습니다 (시도: ${(r.tried || []).join(', ')}).`));
+        kids.push(nameRow(r));
+        kids.push(h('small', { class: 'hint' }, 'Windows·macOS에 Tailscale을 직접 설치했다면 그 컴퓨터의 PowerShell·터미널에서 「tailscale ip -4」를 실행해 나온 100.x 주소를 넣어도 됩니다.'));
+      }
       out.replaceChildren(...kids);
     } catch (ex) { out.replaceChildren(h('small', { class: 'form-error' }, ex.message)); }
-  }));
+  });
+  btn.addEventListener('click', () => search(btn));
   return h('div', { class: 'ts-finder' }, btn, out);
 }
 
@@ -146,7 +165,18 @@ function setupTokenFix(det, onDone) {
   }
   kids.push(h('div', { class: 'row' }, h('span', { class: 'grow' }, inp), save),
     h('p', { class: 'hint' }, 'Cloudflare 대시보드 › 내 프로필 › API 토큰 › 「영역 DNS 편집」 템플릿 + 「영역 · 영역 · 읽기」 권한. 저장 전에 존·DNS 접근을 실제로 확인합니다.'), err);
-  return h('div', { class: 'fix-box stack tight' }, ...kids);
+  const box = h('div', { class: 'fix-box stack tight' }, ...kids);
+  // the setup wizard's 「다음」: a pasted but not yet saved token is checked and saved, not dropped
+  box.saveIfTyped = async () => {
+    const v = inp.value.trim();
+    if (!v) return false;
+    await api('POST', '/api/cloudflare/token', { token: v });
+    inp.value = '';
+    await refreshState();
+    toast('Cloudflare 토큰을 확인하고 저장했습니다');
+    return true;
+  };
+  return box;
 }
 
 /** one inline fix for a check that is not ok — or null when only a tab can fix it */
@@ -169,6 +199,13 @@ function setupFixFor(target, c, det, rerun, leave) {
   // problems that only exist because the Cloudflare token is missing: one token form fixes them all
   if (noToken && (key === 'caddy/cftoken' || key === 'crowdsec/sync') && use('cloudflare')) return h('p', { class: 'hint' }, '아래(또는 위) Cloudflare의 「API 토큰」을 넣으면 함께 해결됩니다.');
   if (key === 'cloudflare/token' || (key === 'caddy/cftoken' && noToken)) return setupTokenFix(det, () => rerun(true));
+  if (key === 'crowdsec/lapi' && /거부/.test(c.detail || c.msg || '')) {
+    const b = h('button', { type: 'button', class: 'btn sm primary' }, '바운서 키 다시 등록');
+    b.addEventListener('click', () => busy(b, async () => {
+      try { await api('POST', '/api/crowdsec/bouncer'); toast('길목의 키로 바운서를 다시 등록했습니다'); rerun(false); } catch (ex) { toast(ex.message, 'err', 9000); }
+    }));
+    return h('div', { class: 'fix-box row' }, h('span', { class: 'grow' }, 'CrowdSec에 등록된 길목 바운서의 키가 길목이 가진 키와 다릅니다 (예: 길목을 초기화한 뒤 다시 설치). 길목의 키로 다시 등록합니다.'), b);
+  }
   if (key === 'crowdsec/key') {
     const b = h('button', { type: 'button', class: 'btn sm primary' }, '바운서 키 만들기');
     b.addEventListener('click', () => busy(b, async () => {
@@ -243,7 +280,8 @@ async function openQuickSetup() {
   try { stacks = (await loadStacks()).stacks || {}; } catch { /* older server or no Docker */ }
   // per container component: connect to what is there, or let Gilmok install it
   const STACKED = ['caddy', 'authelia', 'crowdsec'];
-  const installed = Object.fromEntries(STACKED.map((k) => [k, !!(stacks[k] && stacks[k].record)]));
+  // installed = Gilmok's record and its container exists (a record without a container can be reinstalled)
+  const installed = Object.fromEntries(STACKED.map((k) => [k, !!(stacks[k] && stacks[k].record && stacks[k].state)]));
   const mode = Object.fromEntries(STACKED.map((k) => [k, !det.docker || installed[k] || ((det.containers || {})[k] || []).length ? 'connect' : 'install']));
 
   const fields = {
@@ -455,22 +493,52 @@ async function openSetupWizard() {
   let imported = null;
   let idx = 0;
   // components installed by Gilmok during this wizard: their settings are set, detection must not overwrite them
+  // managedNow[k]: Gilmok installed it (or is installing it) — the connection is Gilmok's to set
   const managedNow = {};
-  try {
-    const st0 = (await loadStacks()).stacks || {};
-    for (const k of ['caddy', 'authelia', 'crowdsec']) if (st0[k] && st0[k].record) managedNow[k] = true;
-  } catch { /* older server or no Docker */ }
+  const views = {}; // last /api/stacks view per component: record, state, job
+  const takeViews = (r) => {
+    for (const k of ['caddy', 'authelia', 'crowdsec']) {
+      const v = (r && r.stacks && r.stacks[k]) || null;
+      views[k] = v;
+      managedNow[k] = !!(v && (v.record || (v.job && v.job.state === 'running' && v.job.action === 'install')));
+    }
+  };
+  try { takeViews(await loadStacks()); } catch { /* older server or no Docker */ }
   const stackTop = (k) => (typeof stackCard === 'function' ? stackCard(k, () => {
-    // installed (or removed) here: Gilmok already set the connection — re-read it and redraw the step
-    loadStacks().then((r) => { managedNow[k] = !!(r.stacks[k] && r.stacks[k].record); }).catch(() => {}).finally(() => render());
+    // install / remove finished: re-read and redraw the step
+    loadStacks().then(takeViews).catch(() => {}).finally(() => render());
   }) : null);
-  // a component Gilmok installed: the connection is set automatically, so the fields fold away
-  // and 「다음」 does not save them (nothing to pick from the container list)
-  const connBlock = (k, label, f, extra) => (managedNow[k]
-    ? h('div', { class: 'stack tight' },
-      callout('ok', h('b', null, `길목이 설치한 ${label}에 연결되어 있습니다`), h('span', { class: 'small' }, '컨테이너 이름·설정 파일 경로는 설치할 때 자동으로 맞췄습니다 — 따로 고를 필요가 없습니다. 「다음」으로 넘어가세요.')),
-      h('details', null, h('summary', { class: 'small muted' }, '연결 정보 보기 (자동 설정됨)'), h('div', { class: 'grid-2' }, f.els)))
-    : h('div', { class: 'stack' }, h('div', { class: 'grid-2' }, f.els), extra || null));
+  // the connection fields of a component, by its real state:
+  //   installing → "설치 중" (fields folded, 「다음」 does not save them)
+  //   installed and its container exists → "연결되어 있습니다"; container missing → warning
+  //   not Gilmok's → the fields as usual
+  const connBlock = (k, label, f, extra) => {
+    const box = h('div', { class: 'stack tight' });
+    const grid = h('div', { class: 'grid-2' }, f.els);
+    const folded = (text) => h('details', null, h('summary', { class: 'small muted' }, text), grid);
+    const paint = () => {
+      const v = views[k];
+      const installing = !!(v && v.job && v.job.state === 'running');
+      if (installing) {
+        fill(box, callout('', h('b', null, `${label} 작업이 진행 중입니다`), h('span', { class: 'small' }, '위의 진행 상황이 끝나면 길목이 연결 정보를 자동으로 맞춥니다 — 아래 칸은 고치지 않아도 됩니다.')), folded('연결 정보 보기'));
+      } else if (v && v.record && v.state) {
+        fill(box, callout('ok', h('b', null, `길목이 설치한 ${label}에 연결되어 있습니다`), h('span', { class: 'small' }, '컨테이너 이름·설정 파일 경로는 설치할 때 자동으로 맞췄습니다 — 따로 고를 필요가 없습니다. 「다음」으로 넘어가세요.')), folded('연결 정보 보기 (자동 설정됨)'));
+      } else if (v && v.record) {
+        fill(box, callout('warn', h('b', null, `길목이 설치한 ${label}의 컨테이너가 없습니다`), h('span', { class: 'small' }, '위에서 「다시 설치」를 누르면 남아 있는 설정·데이터로 다시 만듭니다.')), folded('연결 정보 보기'));
+      } else {
+        fill(box, grid, extra || null);
+      }
+    };
+    paint();
+    // the install card tells us when a job starts or ends
+    const onStack = (e) => {
+      if (!box.isConnected) { document.removeEventListener('gm:stack', onStack); return; }
+      if (e.detail && e.detail.name !== k) return;
+      loadStacks().then(takeViews).then(paint).catch(() => {});
+    };
+    document.addEventListener('gm:stack', onStack);
+    return box;
+  };
   const saveUnlessManaged = (k, f) => () => (managedNow[k] ? Promise.resolve() : setupSave(f.read()));
 
   const steps = () => [
@@ -572,7 +640,14 @@ async function openSetupWizard() {
         // the quickest path first: reuse the token the Caddy container already has
         !(S.state || {}).cfConfigured && det.caddyToken ? setupTokenFix(det, draw) : cfTokenCard(async () => { await refreshState(); draw(); }));
       draw();
-      return { lead: 'DNS 레코드를 자동으로 관리하려면 API 토큰이 필요합니다. 지금 없으면 「건너뛰기」하고 나중에 Cloudflare 탭에서 넣어도 됩니다.', body: holder, save: async () => {} };
+      // 「다음」 also saves a token that was pasted but not saved with its own button (it used to be dropped)
+      const save = async () => {
+        const card = holder.firstElementChild;
+        if (card && card.saveIfTyped) {
+          try { await card.saveIfTyped(); } catch (ex) { throw new Error(`Cloudflare 토큰: ${ex.message}`); }
+        }
+      };
+      return { lead: 'DNS 레코드를 자동으로 관리하려면 API 토큰이 필요합니다. 지금 없으면 「건너뛰기」하고 나중에 Cloudflare 탭에서 넣어도 됩니다.', body: holder, save };
     },
     crowdsec() {
       const f = settingsFields([

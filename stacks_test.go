@@ -425,6 +425,10 @@ func TestManagedCrowdSecInstall(t *testing.T) {
 	if rj["state"] != "ok" || !ready {
 		t.Fatalf("restart did not wait for readiness: %v", rj)
 	}
+	// the bouncer is re-registered with Gilmok's key (a kept CrowdSec database had the old key after a reset)
+	if !fd.called("cscli bouncers delete gilmok") || !fd.called("cscli bouncers add gilmok -k") {
+		t.Fatal("bouncer gilmok was not re-registered with the current key")
+	}
 
 	// the Caddy container changes → CrowdSec follows (acquisition rewritten, restarted)
 	boss.must(200, "PUT", "/api/settings", settingsJSON(t, f, func(s *Settings) { s.CaddyContainer = "gilmok-caddy" }))

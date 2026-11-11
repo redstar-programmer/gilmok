@@ -40,6 +40,8 @@ func TestMain(m *testing.M) {
 		fmt.Println("v2.99.0 fake")
 		os.Exit(0)
 	}
+	// tests never ask the real Tailscale DNS (tests that need it fake tsMagicLookup)
+	tsMagicLookup = func(context.Context, string) ([]string, bool) { return nil, false }
 	os.Exit(m.Run())
 }
 

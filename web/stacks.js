@@ -104,6 +104,9 @@ function stackJobLog(name, onEnd) {
   return box;
 }
 
+/** tell other views (the setup wizard's connection fields) that a stack job started or ended */
+const stackEvent = (name) => document.dispatchEvent(new CustomEvent('gm:stack', { detail: { name } }));
+
 const stackActionLabel = (a) => ({ install: '설치', start: '시작', stop: '정지', restart: '재시작', remove: '제거', compose: 'compose 적용' }[a] || a);
 
 /** the managed-stack card for one component */
@@ -117,12 +120,12 @@ function stackCard(name, onChanged) {
     if (!v) { box.replaceChildren(); return; }
     const rec = v.record;
     const job = v.job;
-    const log = stackJobLog(name, async (j) => { if (j && j.state !== 'running') { await refreshState(); onChanged && onChanged(); draw(); } });
+    const log = stackJobLog(name, async (j) => { if (j && j.state !== 'running') { await refreshState(); stackEvent(name); onChanged && onChanged(); draw(); } });
     if (job) log.paint(job);
     const running = job && job.state === 'running';
     if (!rec) {
       const inst = h('button', { type: 'button', class: 'btn primary', disabled: !canSys || running, title: canSys ? '' : '「연결·시스템」 권한이 필요합니다' }, icon('plus'), `길목이 ${v.label} 설치…`);
-      inst.addEventListener('click', () => openStackInstall(name, v, () => draw(), () => draw()));
+      inst.addEventListener('click', () => openStackInstall(name, v, () => { stackEvent(name); draw(); }, () => { stackEvent(name); draw(); }));
       fill(box, h('div', { class: 'stack-intro' },
         h('div', { class: 'grow' }, h('b', null, `${v.label}가 아직 없나요?`),
           h('p', { class: 'small muted' }, `길목이 ${v.label}를 옆 컨테이너로 설치하고 아래 연결 정보까지 맞춥니다. 이미 실행 중인 ${v.label}가 있으면 아래에서 그 컨테이너에 연결하세요.`)),
@@ -144,7 +147,7 @@ function stackCard(name, onChanged) {
             message: `${rec.hostDir}\n\n지우면 인증서·설정·데이터가 사라집니다. 되돌릴 수 없습니다.` });
           body = { keepData: wipeOk ? '0' : '1' };
         } else if (confirmMsg && !(await confirmDialog({ title: `${v.label} ${label}`, message: confirmMsg, okText: label }))) return;
-        try { await busy(b, () => api('POST', `/api/stacks/${name}/${action}`, body)); draw(); } catch (ex) { toast(ex.message, 'err', 8000); }
+        try { await busy(b, () => api('POST', `/api/stacks/${name}/${action}`, body)); stackEvent(name); draw(); } catch (ex) { toast(ex.message, 'err', 8000); }
       });
       return b;
     };

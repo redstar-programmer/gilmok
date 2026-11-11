@@ -88,6 +88,15 @@ if ($Lang -ne "") { Set-EnvKey "GM_LANG" $Lang }
 if ($PSBoundParameters.ContainsKey("Build")) { Set-EnvKey "GM_BUILD" ($(if ($Build) { "1" } else { "0" })) }
 $useBuild = (Get-EnvKey "GM_BUILD") -eq "1"
 if ($Domain -ne "") { Set-EnvKey "GM_DOMAIN" $Domain }
+if ($TailscaleIP -eq "" -and (Get-EnvKey "GM_TAILSCALE_IP") -eq "") {
+    # Tailscale installed on this Windows host: the container cannot ask it, so read it here
+    $tsExe = (Get-Command tailscale -ErrorAction SilentlyContinue).Source
+    if (-not $tsExe -and (Test-Path "$env:ProgramFiles\Tailscale\tailscale.exe")) { $tsExe = "$env:ProgramFiles\Tailscale\tailscale.exe" }
+    if ($tsExe) {
+        $found = (& $tsExe ip -4 2>$null | Select-Object -First 1)
+        if ($found -match '^100\.\d+\.\d+\.\d+$') { $TailscaleIP = $found; Write-Host "Tailscale IP of this host: $found" }
+    }
+}
 if ($TailscaleIP -ne "") { Set-EnvKey "GM_TAILSCALE_IP" $TailscaleIP }
 
 # --- preflight

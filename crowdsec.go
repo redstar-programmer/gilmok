@@ -424,7 +424,18 @@ func (a *App) postCSBouncer(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, errors.New("데이터 폴더를 알 수 없습니다"))
 		return
 	}
-	st := a.store.Snapshot().Settings
+	d := a.store.Snapshot()
+	st := d.Settings
+	// a CrowdSec Gilmok installed: put its bouncer "gilmok" back on Gilmok's key (a kept database can
+	// hold an older key) instead of adding another bouncer
+	if rec := d.Stacks["crowdsec"]; rec != nil && rec.Container == st.CrowdSecContainer && csKey() != "" {
+		if err := reRegisterBouncer(rec.Container); err != nil {
+			fail(w, 502, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "bouncer": "gilmok"})
+		return
+	}
 	name := "gilmok-" + time.Now().Format("20060102-150405")
 	out, err := ctrExec(st.CrowdSecContainer, nil, "cscli", "bouncers", "add", name, "-o", "raw")
 	key := strings.TrimSpace(out)
