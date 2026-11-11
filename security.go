@@ -16,6 +16,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -109,28 +111,65 @@ func (a *Auth) gatewayIPs() []net.IP {
 		return a.gateways
 	}
 	a.gwAt = time.Now()
-	name, err := hostnameSelf()
-	if err != nil || name == "" {
-		return a.gateways
-	}
-	ctx, cancel := withTimeout(5 * time.Second)
-	defer cancel()
-	out, err := docker(ctx, nil, nil, "inspect", "-f", "{{json .NetworkSettings.Networks}}", name)
-	if err != nil {
-		return a.gateways
-	}
-	var nets map[string]struct{ Gateway string }
-	if json.Unmarshal([]byte(out), &nets) != nil {
-		return a.gateways
-	}
-	var gws []net.IP
-	for _, n := range nets {
-		if ip := net.ParseIP(n.Gateway); ip != nil {
-			gws = append(gws, ip)
+	// the default route works without the Docker socket (a plain `docker run -p` of the image)
+	gws := defaultRouteGateways()
+	if name, err := hostnameSelf(); err == nil && name != "" {
+		ctx, cancel := withTimeout(5 * time.Second)
+		defer cancel()
+		if out, err := docker(ctx, nil, nil, "inspect", "-f", "{{json .NetworkSettings.Networks}}", name); err == nil {
+			var nets map[string]struct{ Gateway string }
+			if json.Unmarshal([]byte(out), &nets) == nil {
+				for _, n := range nets {
+					if ip := net.ParseIP(n.Gateway); ip != nil && !containsIP(gws, ip) {
+						gws = append(gws, ip)
+					}
+				}
+			}
 		}
 	}
-	a.gateways = gws
-	return gws
+	if len(gws) > 0 {
+		a.gateways = gws
+	}
+	return a.gateways
+}
+
+func containsIP(list []net.IP, ip net.IP) bool {
+	for _, x := range list {
+		if x.Equal(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// procNetRoute: the kernel routing table (a seam for tests). Only Linux has it — elsewhere (Gilmok
+// running natively) access comes over loopback anyway.
+var procNetRoute = "/proc/net/route"
+
+// defaultRouteGateways: the gateway of the default route — inside a container that is the bridge
+// gateway, which is where host-published ports arrive from. Other containers on the network come
+// from their own addresses, so they are still refused.
+func defaultRouteGateways() []net.IP {
+	b, err := os.ReadFile(procNetRoute)
+	if err != nil {
+		return nil
+	}
+	var out []net.IP
+	for i, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if i == 0 || len(f) < 3 || f[1] != "00000000" { // header; only the default route (destination 0.0.0.0)
+			continue
+		}
+		v, err := strconv.ParseUint(f[2], 16, 32)
+		if err != nil || v == 0 {
+			continue
+		}
+		ip := net.IPv4(byte(v), byte(v>>8), byte(v>>16), byte(v>>24)) // little-endian hex
+		if !containsIP(out, ip) {
+			out = append(out, ip)
+		}
+	}
+	return out
 }
 
 type access struct {
