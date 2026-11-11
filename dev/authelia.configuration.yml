@@ -1,0 +1,66 @@
+server:
+  address: 'tcp://0.0.0.0:9091'
+
+log:
+  level: 'info'
+
+totp:
+  issuer: 'example.com'
+
+authentication_backend:
+  file:
+    path: '/config/users_database.yml'
+
+access_control:
+  default_policy: 'one_factor'
+  rules:
+    - domain: 'list.example.com'
+      policy: 'one_factor'
+    - domain: 'dockhand.example.com'
+      policy: 'one_factor'
+    - domain: 'downloader.example.com'
+      policy: 'one_factor'
+
+# secret 은 AUTHELIA_SESSION_SECRET_FILE 로 주입
+session:
+  cookies:
+    - name: 'authelia_session'
+      domain: 'example.com'
+      authelia_url: 'https://auth.example.com'
+      expiration: '1h'
+      inactivity: '5m'
+
+# jwt_secret 은 AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET_FILE 로 주입
+identity_validation:
+  reset_password: {}
+
+# encryption_key 는 AUTHELIA_STORAGE_ENCRYPTION_KEY_FILE 로 주입
+storage:
+  local:
+    path: '/config/db.sqlite3'
+
+notifier:
+  filesystem:
+    filename: '/config/notification.txt'
+
+# hmac_secret 은 AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET_FILE 로 주입
+identity_providers:
+  oidc:
+    jwks:
+      - key_id: 'main'
+        algorithm: 'RS256'
+        use: 'sig'
+        key: {{ secret "/secrets/oidc_jwks_rsa.pem" | mindent 10 "|" | msquote }}
+    clients:
+      - client_id: 'immich'
+        client_name: 'Immich'
+        client_secret: '여기에_Digest_값($pbkdf2-sha512$...)'
+        public: false
+        authorization_policy: 'two_factor'
+        redirect_uris:
+          - 'https://immich.example.com/auth/login'
+          - 'https://immich.example.com/user-settings'
+          - 'app.immich:///oauth-callback'
+        scopes: ['openid', 'profile', 'email']
+        userinfo_signed_response_alg: 'none'
+        token_endpoint_auth_method: 'client_secret_post'

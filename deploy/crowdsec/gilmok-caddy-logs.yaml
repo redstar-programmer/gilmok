@@ -1,0 +1,45 @@
+# Based on crowdsecurity/caddy-logs. Differences:
+#   - only lines labelled type=gmcaddy (see acquis.yaml), so the stock parser does not double count
+#   - source IP = gm_real_ip (Cf-Connecting-Ip, written by Gilmok on mTLS sites only — those can
+#     only be reached through Cloudflare, so the header cannot be forged). Docker Desktop rewrites
+#     the TCP peer to the bridge gateway, which crowdsecurity/whitelists drops anyway.
+filter: |
+  evt.Parsed.program == 'gmcaddy' &&
+  UnmarshalJSON(evt.Parsed.message, evt.Unmarshaled, 'caddy') in ['', nil] &&
+  (evt.Unmarshaled.caddy.logger == nil || evt.Unmarshaled.caddy.logger != 'http.handlers.waf') &&
+  evt.Unmarshaled.caddy.request != nil
+onsuccess: next_stage
+name: gilmok/caddy-logs
+description: "Parse caddy access logs written by Gilmok (real client IP behind Cloudflare)"
+statics:
+  - meta: log_type
+    value: http_access-log
+  - target: evt.StrTime
+    expression: |
+      Sprintf("%v", evt.Unmarshaled.caddy.ts) matches '^[0-9e\\.\\+]+$' ? int(evt.Unmarshaled.caddy.ts) : evt.Unmarshaled.caddy.ts
+  - meta: service
+    value: http
+  - parsed: remote_ip
+    expression: "evt.Unmarshaled.caddy.gm_real_ip not in [nil, ''] ? evt.Unmarshaled.caddy.gm_real_ip : evt.Unmarshaled.caddy.request.client_ip"
+  - parsed: http_version
+    expression: "Split(evt.Unmarshaled.caddy.request.proto, '/')[1]"
+  - meta: source_ip
+    expression: evt.Parsed.remote_ip
+  - meta: http_status
+    expression: "evt.Unmarshaled.caddy.status != nil ? int(evt.Unmarshaled.caddy.status) : nil"
+  - meta: http_path
+    expression: "evt.Unmarshaled.caddy.request.uri"
+  - parsed: request
+    expression: "evt.Unmarshaled.caddy.request.uri"
+  - parsed: verb
+    expression: "evt.Unmarshaled.caddy.request.method"
+  - meta: http_verb
+    expression: "evt.Unmarshaled.caddy.request.method"
+  - parsed: http_user_agent
+    expression: "get(evt.Unmarshaled.caddy.request.headers, 'User-Agent') != nil ? evt.Unmarshaled.caddy.request.headers['User-Agent'][0] : nil"
+  - meta: http_user_agent
+    expression: evt.Parsed.http_user_agent
+  - meta: target_fqdn
+    expression: "evt.Unmarshaled.caddy.request.host"
+  - meta: sub_type
+    expression: "evt.Meta.http_status == '401' && get(evt.Unmarshaled.caddy.resp_headers, 'Www-Authenticate') != nil && any(get(evt.Unmarshaled.caddy.resp_headers, 'Www-Authenticate'), { # startsWith 'Basic' }) ? 'auth_fail' : nil"

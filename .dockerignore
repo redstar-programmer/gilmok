@@ -1,0 +1,7 @@
+dev
+data
+reference
+*.md
+*.exe
+.env
+secrets

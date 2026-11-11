@@ -1,0 +1,8 @@
+# CrowdSec acquisition: Caddy container logs via the Docker socket.
+# Gilmok writes access logs only for mTLS (orange cloud) sites, with the real client IP
+# from Cf-Connecting-Ip in the `gm_real_ip` field. Parsed by gilmok-caddy-logs.yaml.
+source: docker
+container_name:
+  - caddy
+labels:
+  type: gmcaddy

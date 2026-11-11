@@ -1,0 +1,15 @@
+data/
+*.env
+.env
+secrets/
+dev/run/
+*.exe
+*.db
+*.db-wal
+*.db-shm
+metrics.json
+.claude/
+
+# local only: notes about the author's own server (not part of the project)
+CLAUDE.md
+reference/

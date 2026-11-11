@@ -1,0 +1,81 @@
+# Gilmok — deployment compose file. deploy\install.ps1 copies it next to a `.env` that holds the
+# values of this environment (folders, container names, network). Every ${...} below has a default,
+# so it also works with `docker compose up -d` after you fill `.env` by hand (see .env.example).
+#
+# The admin UI is published on 127.0.0.1 only (first setup / emergency access on the server itself).
+# Remote access goes through Caddy as a private (e.g. Tailscale-only) + Authelia site.
+#
+# CrowdSec (optional, profile "crowdsec"): install.ps1 -CrowdSec writes COMPOSE_PROFILES=crowdsec and
+# CROWDSEC_BOUNCER_KEY into .env, so a plain `docker compose up -d` keeps starting it.
+name: gilmok
+
+services:
+  gilmok:
+    build: ./src
+    image: gilmok:local
+    container_name: ${GM_CONTAINER:-gilmok}
+    restart: unless-stopped
+    logging: &logs
+      options: { max-size: "10m", max-file: "3" }
+    ports:
+      - "127.0.0.1:${GM_PORT:-8088}:8080"
+    # Linux: lets Gilmok reach the host (Caddy admin API on the host, health checks of published
+    # ports) the same way as on Docker Desktop
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      TZ: ${TZ:-UTC}
+      # first-start defaults only (later the 설정 tab is the source of truth); empty = asked in the UI
+      GM_DOMAIN: ${GM_DOMAIN:-}
+      GM_TAILSCALE_IP: ${GM_TAILSCALE_IP:-}
+      GM_CADDY_CONTAINER: ${GM_CADDY_CONTAINER:-caddy}
+      GM_AUTHELIA_CONTAINER: ${GM_AUTHELIA_CONTAINER:-authelia}
+      GM_CADDYFILE: /stacks/caddy/Caddyfile
+      GM_AUTHELIA_CONFIG: /stacks/authelia-config/configuration.yml
+      GM_AUTHELIA_USERS: /stacks/authelia-config/users_database.yml
+      GM_CF_TOKEN_FILE: /run/secrets/cf_token
+      GM_CROWDSEC_CONTAINER: ${GM_CROWDSEC_CONTAINER:-crowdsec}
+      GM_CROWDSEC_LAPI: http://${GM_CROWDSEC_CONTAINER:-crowdsec}:8080
+      GM_CROWDSEC_KEY_FILE: /run/secrets/crowdsec_key
+      # GM_DEV_FAULTS must NEVER be set here (fault injection is for the dev test stack only)
+    volumes:
+      - ./data:/data
+      - ./secrets/cf_token:/run/secrets/cf_token:ro
+      - ./secrets/crowdsec_key:/run/secrets/crowdsec_key:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Caddy stack folder: the Caddyfile is written in place; the whole folder is also what
+      # `docker compose` needs for in-app updates (compose file, .env, build context)
+      - ${GM_CADDY_DIR:-../caddy}:/stacks/caddy
+      # Authelia: only the config folder is written (access_control block, users_database.yml)
+      - ${GM_AUTHELIA_CONFIG_DIR:-../authelia/config}:/stacks/authelia-config
+      # Authelia stack folder, read-only, for in-app updates (docker compose)
+      - ${GM_AUTHELIA_DIR:-../authelia}:/stacks/authelia:ro
+    networks:
+      - proxy
+
+  # Reads the Caddy container's logs through the Docker socket. Only mTLS (Proxied) sites write
+  # access logs with the real client IP (Gilmok generates that), parsed by gilmok-caddy-logs.yaml.
+  # Bans go to Cloudflare via Gilmok (bouncer "gilmok"); no ports are published.
+  crowdsec:
+    image: crowdsecurity/crowdsec:latest
+    container_name: ${GM_CROWDSEC_CONTAINER:-crowdsec}
+    restart: unless-stopped
+    logging: *logs
+    profiles: [crowdsec]
+    environment:
+      TZ: ${TZ:-UTC}
+      COLLECTIONS: "crowdsecurity/caddy crowdsecurity/http-cve"
+      BOUNCER_KEY_gilmok: ${CROWDSEC_BOUNCER_KEY:-}   # written by install.ps1 -CrowdSec
+    volumes:
+      - ./crowdsec/acquis.yaml:/etc/crowdsec/acquis.d/gilmok-caddy.yaml:ro
+      - ./crowdsec/gilmok-caddy-logs.yaml:/etc/crowdsec/parsers/s01-parse/gilmok-caddy-logs.yaml:ro
+      - ./crowdsec/config:/etc/crowdsec
+      - ./crowdsec/data:/var/lib/crowdsec/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    name: ${GM_NETWORK:-reverseproxy}   # the Docker network your Caddy is on
+    external: true

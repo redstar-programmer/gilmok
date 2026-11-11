@@ -1,0 +1,93 @@
+# Test stack — mirrors production layout with isolated names (gm-test-*) and its own network.
+# Never touches caddy / authelia / reverseproxy.
+#
+#   bash dev/reset.sh            # (once) generate dev/run/* fixtures (Caddyfile, Authelia config, secrets, test user)
+#   docker compose -f dev/docker-compose.yml up -d --build
+#   open http://127.0.0.1:18088
+#
+# Caddy uses `local_certs` (no ACME, no Cloudflare calls). The app has no Cloudflare token, so DNS is skipped.
+name: gmtest
+
+services:
+  app:
+    build: ..
+    container_name: gm-test-app
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18088:8080"
+    environment:
+      GM_DOMAIN: example.com
+      GM_TAILSCALE_IP: 100.64.0.10
+      GM_CADDY_CONTAINER: gm-test-caddy
+      GM_AUTHELIA_CONTAINER: gm-test-authelia
+      GM_DEV_FAULTS: "1"   # enables the rollback test (fault injection) panel — NEVER in production
+      GM_CROWDSEC_CONTAINER: gm-test-crowdsec
+      GM_CROWDSEC_LAPI: http://gm-test-crowdsec:8080
+      GM_CROWDSEC_KEY: gmtest-bouncer-key-not-a-secret   # test stack only
+    volumes:
+      - ./run/caddy:/stacks/caddy
+      - ./run/authelia/config:/stacks/authelia-config
+      - ./run/data:/data
+      # this compose folder, so the in-app "update" (docker compose for caddy/authelia) can run —
+      # same as production mounting D:\Docker\caddy and D:\Docker\authelia
+      - .:/stacks/dev-stack:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [gmtest]
+
+  caddy:
+    build: ./caddy            # Caddy + Cloudflare DNS + Coraza WAF (same recipe as deploy/caddy)
+    image: gm-test-caddy-waf
+    container_name: gm-test-caddy
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:18443:443"
+      - "127.0.0.1:18444:8443"
+    environment:
+      CLOUDFLARE_API_TOKEN: dummy-test-token
+    volumes:
+      # single-file bind mount on purpose (same as production → exercises writeInPlace)
+      - ./run/caddy/Caddyfile:/etc/caddy/Caddyfile
+      - ./run/caddy/cf-origin-pull-ca.pem:/etc/caddy/cf-origin-pull-ca.pem:ro
+      - caddy-data:/data
+    networks: [gmtest]
+
+  authelia:
+    image: authelia/authelia:latest
+    container_name: gm-test-authelia
+    restart: always
+    volumes:
+      - ./run/authelia/config:/config
+      - ./run/authelia/secrets:/secrets:ro
+    environment:
+      TZ: Asia/Seoul
+      X_AUTHELIA_CONFIG_FILTERS: template
+      AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET_FILE: /secrets/jwt_secret
+      AUTHELIA_SESSION_SECRET_FILE: /secrets/session_secret
+      AUTHELIA_STORAGE_ENCRYPTION_KEY_FILE: /secrets/storage_encryption_key
+      AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET_FILE: /secrets/oidc_hmac_secret
+    networks: [gmtest]
+
+  crowdsec:
+    image: crowdsecurity/crowdsec:latest
+    container_name: gm-test-crowdsec
+    restart: unless-stopped
+    environment:
+      COLLECTIONS: "crowdsecurity/caddy crowdsecurity/http-cve"
+      BOUNCER_KEY_gilmok: gmtest-bouncer-key-not-a-secret
+      DISABLE_ONLINE_API: "true"
+    volumes:
+      - ./crowdsec/acquis.yaml:/etc/crowdsec/acquis.d/gilmok-caddy.yaml:ro
+      - ../deploy/crowdsec/gilmok-caddy-logs.yaml:/etc/crowdsec/parsers/s01-parse/gilmok-caddy-logs.yaml:ro
+      - crowdsec-db:/var/lib/crowdsec/data
+      - crowdsec-config:/etc/crowdsec
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [gmtest]
+
+volumes:
+  caddy-data:
+  crowdsec-db:
+  crowdsec-config:
+
+networks:
+  gmtest:
+    name: gmtest
