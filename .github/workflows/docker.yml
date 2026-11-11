@@ -5,6 +5,7 @@
 # Needs two repository secrets (Settings › Secrets and variables › Actions):
 #   DOCKERHUB_USERNAME  the Docker Hub account (vitive)
 #   DOCKERHUB_TOKEN     a Docker Hub access token with Read & Write (not the account password)
+# A version tag also creates the GitHub release (notes: docs/releases/<tag>.md, else generated).
 name: docker
 
 on:
@@ -52,3 +53,23 @@ jobs:
             VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          notes="docs/releases/${TAG}.md"
+          if [ -f "$notes" ]; then
+            gh release create "$TAG" --title "Gilmok ${TAG}" --notes-file "$notes" --verify-tag
+          else
+            gh release create "$TAG" --title "Gilmok ${TAG}" --generate-notes --verify-tag
+          fi
