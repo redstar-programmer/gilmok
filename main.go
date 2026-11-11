@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -20,6 +21,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 //go:embed web
@@ -102,6 +104,7 @@ func (app *App) handler() http.Handler {
 	api.HandleFunc("GET /api/services/export.xlsx", app.getServicesExport)
 	api.HandleFunc("PUT /api/settings", app.saveSettings) // step-up checked inside for security fields
 	api.HandleFunc("POST /api/import", S(app.importExisting))
+	api.HandleFunc("GET /api/fs/browse", app.getFSBrowse)
 	api.HandleFunc("GET /api/plan", app.getPlan)
 	api.HandleFunc("POST /api/apply", S(app.postApply))
 	api.HandleFunc("GET /api/dns", app.getDNS)
@@ -453,10 +456,33 @@ func (a *App) importExisting(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, errors.New("Caddy를 쓰지 않는 구성이라 가져올 Caddyfile이 없습니다 — 서비스 탭에서 직접 추가하세요"))
 		return
 	}
-	src, err := os.ReadFile(st.CaddyfilePath)
-	if err != nil {
-		fail(w, 400, err)
-		return
+	// optional body {name, content}: a Caddyfile chosen on the user's PC — read only, nothing is written
+	var up struct {
+		Name    string `json:"name"`
+		Content string `json:"content"`
+	}
+	if r.ContentLength != 0 && r.Body != nil {
+		if err := readJSON(r, &up); err != nil && !errors.Is(err, io.EOF) {
+			fail(w, 400, err)
+			return
+		}
+	}
+	var src []byte
+	if up.Content != "" {
+		if len(up.Content) > 1<<20 || !utf8.ValidString(up.Content) {
+			fail(w, 400, errors.New("Caddyfile은 1MB 이하의 UTF-8 텍스트여야 합니다"))
+			return
+		}
+		src = []byte(up.Content)
+	} else {
+		var err error
+		if src, err = os.ReadFile(st.CaddyfilePath); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				err = fmt.Errorf("Caddyfile을 찾지 못했습니다 (%s) — 길목 컨테이너에 Caddy 폴더가 마운트돼 있는지, Caddy 단계의 경로가 맞는지 확인하세요. PC에 있는 파일을 직접 골라 가져올 수도 있습니다", st.CaddyfilePath)
+			}
+			fail(w, 400, err)
+			return
+		}
 	}
 	inferred := ""
 	if strings.TrimSpace(st.Domain) == "" {

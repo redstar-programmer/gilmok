@@ -70,7 +70,11 @@ jobs:
         run: |
           mkdir -p dist && cp deploy/docker-compose.sample.yml dist/docker-compose.yml
           notes="docs/releases/${TAG}.md"
-          if [ -f "$notes" ]; then
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # the tag was moved to a newer commit (same version): refresh the asset and the notes
+            gh release upload "$TAG" dist/docker-compose.yml --clobber
+            if [ -f "$notes" ]; then gh release edit "$TAG" --notes-file "$notes"; fi
+          elif [ -f "$notes" ]; then
             gh release create "$TAG" dist/docker-compose.yml --title "Gilmok ${TAG}" --notes-file "$notes" --verify-tag
           else
             gh release create "$TAG" dist/docker-compose.yml --title "Gilmok ${TAG}" --generate-notes --verify-tag

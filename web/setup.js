@@ -103,6 +103,7 @@ function setupInput(key, label, value, opts = {}) {
   const f = field(label, el, opts.hint);
   if (dl) f.append(dl);
   if (opts.container) f.append(containerPicker(el));
+  if (opts.file) f.append(filePicker(el, label));
   if (opts.found) f.append(h('small', { class: 'setup-found' }, opts.found));
   f.dataset.key = key;
   return { f, el };
@@ -249,10 +250,10 @@ async function openQuickSetup() {
     domain: setupInput('domain', '도메인', sg.domain || st.domain, { placeholder: '예: example.com', hint: '모든 서비스 주소의 기준입니다. 나중에 정해도 되지만, 정하기 전에는 「적용」이 막힙니다.', found: sg.domain ? 'Caddyfile 사이트 주소에서 알아냄' : '' }),
     tailscaleIp: setupInput('tailscaleIp', 'Tailscale IP', sg.tailscaleIp || st.tailscaleIp, { placeholder: '예: 100.64.0.10', hint: '사설 전용 서비스의 DNS 값 — 이 서버의 Tailscale 주소(tailscale ip -4)', found: sg.tailscaleIp ? `찾음 — ${sg.tailscaleSrc || 'Caddyfile'}` : '' }),
     caddyContainer: setupInput('caddyContainer', 'Caddy 컨테이너', sg.caddyContainer || st.caddyContainer, { container: true, found: foundText(det, 'caddy') }),
-    caddyfilePath: setupInput('caddyfilePath', 'Caddyfile 경로 (길목이 보는 위치)', sg.caddyfilePath || st.caddyfilePath, { list: files.caddyfile, found: (files.caddyfile || []).length ? `찾음: ${files.caddyfile.length}개` : '찾지 못함 — 길목 컨테이너에 Caddy 폴더를 마운트했는지 확인하세요' }),
+    caddyfilePath: setupInput('caddyfilePath', 'Caddyfile 경로 (길목이 보는 위치)', sg.caddyfilePath || st.caddyfilePath, { list: files.caddyfile, file: true, found: (files.caddyfile || []).length ? `찾음: ${files.caddyfile.length}개` : '찾지 못함 — 길목 컨테이너에 Caddy 폴더를 마운트했는지 확인하세요' }),
     autheliaContainer: setupInput('autheliaContainer', 'Authelia 컨테이너', sg.autheliaContainer || st.autheliaContainer, { container: true, found: foundText(det, 'authelia') }),
-    autheliaConfig: setupInput('autheliaConfig', 'configuration.yml', sg.autheliaConfig || st.autheliaConfig, { list: files.autheliaConfig }),
-    autheliaUsers: setupInput('autheliaUsers', 'users_database.yml', sg.autheliaUsers || st.autheliaUsers, { list: files.autheliaUsers }),
+    autheliaConfig: setupInput('autheliaConfig', 'configuration.yml', sg.autheliaConfig || st.autheliaConfig, { list: files.autheliaConfig, file: true }),
+    autheliaUsers: setupInput('autheliaUsers', 'users_database.yml', sg.autheliaUsers || st.autheliaUsers, { list: files.autheliaUsers, file: true }),
     crowdsecContainer: setupInput('crowdsecContainer', 'CrowdSec 컨테이너', sg.crowdsecContainer || st.crowdsecContainer, { container: true, found: foundText(det, 'crowdsec') }),
     crowdsecLapi: setupInput('crowdsecLapi', 'CrowdSec LAPI 주소', sg.crowdsecLapi || st.crowdsecLapi),
   };
@@ -378,14 +379,23 @@ async function openQuickSetup() {
       // installs, in order (CrowdSec reads the Caddy that exists by then; Authelia repoints Caddy's snippet)
       for (const k of toInstall) {
         const c = COMPONENTS.find((x) => x.key === k);
-        const pre = h('pre', { class: 'log-view stack-log' });
+        const pre = h('pre', { class: 'log-view stack-log', 'aria-live': 'polite' });
         const head = h('div', { class: 'row' }, h('b', null, `${c.name} 설치`), h('span', { class: 'badge warn' }, '진행 중…'));
-        err.before(h('div', { class: 'stack tight' }, head, pre));
+        const pulse = jobPulse();
+        err.before(h('div', { class: 'stack tight' }, head, pre, pulse));
+        pulse.update({ state: 'running', started: new Date().toISOString() });
         pre.scrollIntoView({ block: 'nearest' });
         let j;
         try {
-          j = await runStackInstall(k, inst[k].opts(), (x) => { if (x) { pre.textContent = (x.log || []).join('\n'); pre.scrollTop = pre.scrollHeight; } });
+          j = await runStackInstall(k, inst[k].opts(), (x, now) => {
+            if (!x) return;
+            const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 24;
+            pre.textContent = (x.log || []).join('\n');
+            if (atEnd) pre.scrollTop = pre.scrollHeight;
+            pulse.update(x, now);
+          }, (msg) => pulse.lost(msg));
         } catch (ex) { j = { state: 'fail', error: ex.message }; }
+        if (!j.started) pulse.update(null);
         head.lastChild.replaceWith(h('span', { class: `badge ${j.state === 'ok' ? 'ok' : 'danger'}` }, j.state === 'ok' ? '완료' : '실패'));
         if (j.state !== 'ok') {
           d.lock(false);
@@ -446,7 +456,22 @@ async function openSetupWizard() {
   let idx = 0;
   // components installed by Gilmok during this wizard: their settings are set, detection must not overwrite them
   const managedNow = {};
-  const stackTop = (k) => (typeof stackCard === 'function' ? stackCard(k, () => { managedNow[k] = true; render(); }) : null);
+  try {
+    const st0 = (await loadStacks()).stacks || {};
+    for (const k of ['caddy', 'authelia', 'crowdsec']) if (st0[k] && st0[k].record) managedNow[k] = true;
+  } catch { /* older server or no Docker */ }
+  const stackTop = (k) => (typeof stackCard === 'function' ? stackCard(k, () => {
+    // installed (or removed) here: Gilmok already set the connection — re-read it and redraw the step
+    loadStacks().then((r) => { managedNow[k] = !!(r.stacks[k] && r.stacks[k].record); }).catch(() => {}).finally(() => render());
+  }) : null);
+  // a component Gilmok installed: the connection is set automatically, so the fields fold away
+  // and 「다음」 does not save them (nothing to pick from the container list)
+  const connBlock = (k, label, f, extra) => (managedNow[k]
+    ? h('div', { class: 'stack tight' },
+      callout('ok', h('b', null, `길목이 설치한 ${label}에 연결되어 있습니다`), h('span', { class: 'small' }, '컨테이너 이름·설정 파일 경로는 설치할 때 자동으로 맞췄습니다 — 따로 고를 필요가 없습니다. 「다음」으로 넘어가세요.')),
+      h('details', null, h('summary', { class: 'small muted' }, '연결 정보 보기 (자동 설정됨)'), h('div', { class: 'grid-2' }, f.els)))
+    : h('div', { class: 'stack' }, h('div', { class: 'grid-2' }, f.els), extra || null));
+  const saveUnlessManaged = (k, f) => () => (managedNow[k] ? Promise.resolve() : setupSave(f.read()));
 
   const steps = () => [
     { id: 'comp', title: '구성요소' },
@@ -512,7 +537,7 @@ async function openSetupWizard() {
         { key: 'caddyContainer', label: 'Caddy 컨테이너', mono: true, picker: 'container' },
         { key: 'caddyAdmin', label: 'Caddy 관리 API 주소', mono: true, placeholder: 'http://host.docker.internal:2019' },
         { key: 'caddyBin', label: 'caddy 실행 파일', mono: true, placeholder: '예: C:\\Caddy\\caddy.exe' },
-        { key: 'caddyfilePath', label: 'Caddyfile 경로 — 길목이 보는 위치', mono: true },
+        { key: 'caddyfilePath', label: 'Caddyfile 경로 — 길목이 보는 위치', mono: true, picker: 'file' },
         { key: 'caddyfileInCtr', label: 'Caddyfile 경로 — Caddy 컨테이너 안', mono: true },
       ]);
       for (const k of ['caddyContainer', 'caddyfilePath']) if (fresh && !managedNow.caddy && sg[k]) f.inputs[k].value = sg[k];
@@ -525,21 +550,21 @@ async function openSetupWizard() {
       };
       f.inputs.caddyMode.addEventListener('change', show);
       show();
-      const save = () => setupSave(f.read());
-      return { lead: 'Caddy가 어디서 실행되는지와 Caddyfile 위치를 정합니다. 아직 Caddy가 없으면 위에서 길목이 설치할 수 있습니다.', body: h('div', { class: 'stack' }, stackTop('caddy'), h('div', { class: 'grid-2' }, f.els), checkBtn('caddy', save)), save };
+      const save = saveUnlessManaged('caddy', f);
+      return { lead: 'Caddy가 어디서 실행되는지와 Caddyfile 위치를 정합니다. 아직 Caddy가 없으면 위에서 길목이 설치할 수 있습니다.', body: h('div', { class: 'stack' }, stackTop('caddy'), connBlock('caddy', 'Caddy', f), checkBtn('caddy', save)), save };
     },
     authelia() {
       const f = settingsFields([
         { key: 'autheliaContainer', label: 'Authelia 컨테이너', mono: true, picker: 'container' },
-        { key: 'autheliaConfig', label: 'configuration.yml — 길목 컨테이너 안', mono: true },
-        { key: 'autheliaUsers', label: 'users_database.yml — 길목 컨테이너 안', mono: true },
+        { key: 'autheliaConfig', label: 'configuration.yml — 길목 컨테이너 안', mono: true, picker: 'file' },
+        { key: 'autheliaUsers', label: 'users_database.yml — 길목 컨테이너 안', mono: true, picker: 'file' },
         { key: 'autheliaCtrDir', label: 'config 폴더 — Authelia 컨테이너 안', mono: true },
       ]);
       for (const k of ['autheliaContainer', 'autheliaConfig', 'autheliaUsers']) if (fresh && !managedNow.authelia && sg[k]) f.inputs[k].value = sg[k];
       const hint = foundText(det, 'authelia');
       if (hint) f.inputs.autheliaContainer.closest('.field').append(h('small', { class: 'setup-found' }, hint));
-      const save = () => setupSave(f.read());
-      return { lead: '길목은 configuration.yml의 access_control 블록과 사용자 파일만 고칩니다. 아직 Authelia가 없으면 위에서 길목이 설치할 수 있습니다.', body: h('div', { class: 'stack' }, stackTop('authelia'), h('div', { class: 'grid-2' }, f.els), checkBtn('authelia', save)), save };
+      const save = saveUnlessManaged('authelia', f);
+      return { lead: '길목은 configuration.yml의 access_control 블록과 사용자 파일만 고칩니다. 아직 Authelia가 없으면 위에서 길목이 설치할 수 있습니다.', body: h('div', { class: 'stack' }, stackTop('authelia'), connBlock('authelia', 'Authelia', f), checkBtn('authelia', save)), save };
     },
     cloudflare() {
       const holder = h('div');
@@ -555,7 +580,7 @@ async function openSetupWizard() {
         { key: 'crowdsecLapi', label: 'LAPI 주소', mono: true, hint: '길목에서 접근하는 주소 (예: http://crowdsec:8080)' },
       ]);
       for (const k of ['crowdsecContainer', 'crowdsecLapi']) if (fresh && !managedNow.crowdsec && sg[k]) f.inputs[k].value = sg[k];
-      const save = () => setupSave(f.read());
+      const save = saveUnlessManaged('crowdsec', f);
       let keyRow = null;
       if (!det.csKey && !managedNow.crowdsec) {
         const kb = h('button', { type: 'button', class: 'btn' }, '바운서 키 만들기');
@@ -564,21 +589,29 @@ async function openSetupWizard() {
         }));
         keyRow = h('div', { class: 'row' }, kb, h('span', { class: 'hint' }, '길목이 판정 결과를 읽을 키가 없습니다 — CrowdSec 컨테이너에서 cscli bouncers add 로 만들어 저장합니다 (키는 화면에 나오지 않음).'));
       }
-      return { lead: 'CrowdSec이 판정한 공격 IP를 읽어 옵니다. 아직 CrowdSec이 없으면 위에서 길목이 설치할 수 있습니다.', body: h('div', { class: 'stack' }, stackTop('crowdsec'), h('div', { class: 'grid-2' }, f.els), keyRow, checkBtn('crowdsec', save)), save };
+      return { lead: 'CrowdSec이 판정한 공격 IP를 읽어 옵니다. 아직 CrowdSec이 없으면 위에서 길목이 설치할 수 있습니다.', body: h('div', { class: 'stack' }, stackTop('crowdsec'), connBlock('crowdsec', 'CrowdSec', f, keyRow), checkBtn('crowdsec', save)), save };
     },
     import() {
       const out = h('div');
-      const b = h('button', { type: 'button', class: 'btn primary' }, icon('download'), det.sites ? `서비스 ${det.sites}개 가져오기` : '가져오기');
-      b.addEventListener('click', () => busy(b, async () => {
+      const path = settings().caddyfilePath || '';
+      const b = h('button', { type: 'button', class: 'btn primary' }, icon('download'), det.sites ? `서비스 ${det.sites}개 가져오기` : '설정한 경로에서 가져오기');
+      const pc = h('button', { type: 'button', class: 'btn' }, icon('folder'), 'PC에서 Caddyfile 고르기…');
+      const run = (btn, body) => busy(btn, async () => {
         try {
-          imported = await api('POST', '/api/import');
+          imported = await api('POST', '/api/import', body);
           await refreshState();
           out.replaceChildren(callout('ok', h('b', null, `서비스 ${imported.imported}개를 가져왔습니다.`), (imported.warnings || []).length ? h('ul', { class: 'tight' }, imported.warnings.map((w) => h('li', null, w))) : null));
         } catch (ex) { out.replaceChildren(callout('danger', ex.message)); }
-      }));
+      });
+      b.addEventListener('click', () => run(b));
+      pc.addEventListener('click', async () => { const f = await pickLocalText(); if (f) run(pc, f); });
       return {
         lead: '지금 쓰는 Caddyfile을 읽어 서비스 목록과 기본 골격(전역 옵션·스니펫)을 만듭니다. 실제 파일은 바뀌지 않습니다. 새로 시작한다면 건너뛰세요.',
-        body: h('div', { class: 'stack' }, (S.state.services || []).length ? callout('warn', `이미 서비스 ${S.state.services.length}개가 있습니다 — 가져오면 대체됩니다.`) : null, h('div', { class: 'row' }, b), out),
+        body: h('div', { class: 'stack' }, (S.state.services || []).length ? callout('warn', `이미 서비스 ${S.state.services.length}개가 있습니다 — 가져오면 대체됩니다.`) : null,
+          h('p', { class: 'small muted' }, '설정한 경로: ', h('span', { class: 'mono' }, path || '(없음)')),
+          h('div', { class: 'row' }, b, pc),
+          h('p', { class: 'hint' }, 'PC에서 고른 파일은 서비스 목록을 만드는 데만 씁니다. 길목이 그 Caddyfile을 고치고 적용하려면 Caddy 단계의 경로가 길목에서 보이는 실제 파일이어야 합니다(「찾아보기…」).'),
+          out),
         save: async () => {},
       };
     },

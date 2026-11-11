@@ -56,6 +56,7 @@ const ICONS = {
   globe: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c2.4 2.5 3.6 5.5 3.6 9s-1.2 6.5-3.6 9c-2.4-2.5-3.6-5.5-3.6-9S9.6 5.5 12 3',
   code: 'M8 7l-5 5 5 5M16 7l5 5-5 5',
   clock: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3.5 2.5',
+  folder: 'M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z',
 };
 function icon(name, cls = '') {
   const s = document.createElementNS(SVG_NS, 'svg');
@@ -1329,7 +1330,14 @@ async function runImport(btn) {
   });
   if (!ok) return;
   try {
-    const res = await busy(btn, () => api('POST', '/api/import'));
+    let res;
+    try { res = await busy(btn, () => api('POST', '/api/import')); } catch (ex) {
+      // the Caddyfile is not where the setting says: offer to read one from this PC instead
+      if (!/Caddyfile을 찾지 못했습니다/.test(ex.message) || !(await confirmDialog({ title: 'Caddyfile을 찾지 못했습니다', message: `${ex.message}\n\nPC에 있는 Caddyfile을 직접 골라 가져올까요? (서비스 목록만 만들고, 적용하려면 위 경로가 맞아야 합니다)`, okText: '파일 고르기…' }))) throw ex;
+      const file = await pickLocalText();
+      if (!file) return;
+      res = await busy(btn, () => api('POST', '/api/import', file));
+    }
     S.dns = null;
     await refreshState();
     renderPanel();
@@ -1823,6 +1831,72 @@ function containerPicker(input) {
   return sel;
 }
 
+/**
+ * 「찾아보기…」 for a config-file path: browses the folders Gilmok itself can see (GET /api/fs/browse).
+ * Inside a container that is only what is mounted — which is exactly the path the setting needs.
+ */
+function filePicker(input, label) {
+  const b = h('button', { type: 'button', class: 'btn sm ghost fp-btn', title: '길목이 볼 수 있는 폴더에서 파일을 고릅니다' }, icon('folder'), '찾아보기…');
+  b.disabled = typeof can === 'function' && !can('system');
+  b.addEventListener('click', () => {
+    const where = h('div', { class: 'fp-path mono' });
+    const list = h('ul', { class: 'fp-list', role: 'listbox', 'aria-label': label });
+    const note = h('div');
+    const close = h('button', { type: 'button', class: 'btn ghost' }, '닫기');
+    const d = openDialog({ title: `${label} 고르기`, size: 'wide', body: h('div', { class: 'stack' },
+      h('p', { class: 'hint' }, '길목이 볼 수 있는 파일만 나옵니다. 길목이 컨테이너라면 compose에 마운트한 폴더(예: /stacks/caddy)만 보입니다 — PC의 폴더가 안 보이면 그 폴더를 길목 컨테이너에 마운트하세요.'),
+      where, note, list), footer: [close] });
+    close.addEventListener('click', () => d.close());
+    const go = async (p) => {
+      list.replaceChildren(h('li', { class: 'muted' }, '불러오는 중…'));
+      let r;
+      try { r = await api('GET', `/api/fs/browse?path=${encodeURIComponent(p || '')}`); } catch (ex) { list.replaceChildren(h('li', { class: 'danger-text' }, ex.message)); return; }
+      where.textContent = r.path;
+      fill(note, r.denied ? callout('warn', '길목 데이터·비밀값·시스템 폴더는 고를 수 없습니다.') : r.error ? callout('danger', r.error) : null);
+      const row = (text, cls, onPick) => {
+        const btn = h('button', { type: 'button', class: `fp-item ${cls}` }, text);
+        btn.addEventListener('click', onPick);
+        return h('li', null, btn);
+      };
+      const items = [];
+      if (r.parent) items.push(row('.. (상위 폴더)', 'dir up', () => go(r.parent)));
+      for (const e of r.entries || []) {
+        const full = r.path.replace(/[\\/]+$/, '') + (r.path.includes('\\') ? '\\' : '/') + e.name;
+        items.push(e.dir
+          ? row(`${e.name}/`, 'dir', () => go(full))
+          : row(h('span', { class: 'fp-file' }, h('span', null, e.name), h('small', { class: 'muted' }, fmtBytes(e.size || 0))), 'file', () => {
+            input.value = full;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            d.close();
+          }));
+      }
+      if (!items.length || (items.length === 1 && r.parent)) items.push(h('li', { class: 'muted small' }, '(비어 있음)'));
+      list.replaceChildren(...items);
+      const first = list.querySelector('button');
+      if (first) first.focus();
+    };
+    go(input.value.trim());
+  });
+  return b;
+}
+
+/** let the user pick a Caddyfile on their own PC (read in the browser; the import only reads it) */
+function pickLocalText(accept) {
+  return new Promise((resolve) => {
+    const inp = h('input', { type: 'file', accept: accept || '', hidden: true });
+    inp.addEventListener('change', async () => {
+      const f = inp.files && inp.files[0];
+      inp.remove();
+      if (!f) { resolve(null); return; }
+      if (f.size > 1 << 20) { toast('1MB 이하의 파일만 고를 수 있습니다', 'err'); resolve(null); return; }
+      resolve({ name: f.name, content: await f.text() });
+    });
+    document.body.append(inp);
+    inp.click();
+  });
+}
+
 // ---- settings forms (each step saves only its own fields; the rest of Settings is preserved)
 
 function settingsFields(defs) {
@@ -1883,6 +1957,7 @@ function settingsFields(defs) {
     inputs[f.key] = el;
     const fl = field(f.label, el, f.hint);
     if (f.picker === 'container') fl.append(containerPicker(el));
+    if (f.picker === 'file') fl.append(filePicker(el, f.label));
     return fl;
   });
   els.forEach((el, i) => { if (defs[i].wide && el.classList) el.classList.add('span-all'); });
@@ -2172,7 +2247,7 @@ function renderCaddy(panel) {
     { key: 'caddyContainer', label: 'Caddy 컨테이너', mono: true, hint: 'docker ps 에 보이는 이름', picker: 'container' },
     { key: 'caddyAdmin', label: 'Caddy 관리 API 주소', mono: true, placeholder: 'http://host.docker.internal:2019', hint: '길목에서 접속할 수 있는 주소' },
     { key: 'caddyBin', label: 'caddy 실행 파일', mono: true, placeholder: 'C:\\Caddy\\caddy.exe', hint: 'PATH에 있으면 caddy' },
-    { key: 'caddyfilePath', label: 'Caddyfile 경로 — 길목이 보는 위치', mono: true, hint: '길목이 읽고 쓰는 파일 (예: /stacks/caddy/Caddyfile)' },
+    { key: 'caddyfilePath', label: 'Caddyfile 경로 — 길목이 보는 위치', mono: true, picker: 'file', hint: '길목이 읽고 쓰는 파일 (예: /stacks/caddy/Caddyfile)' },
     { key: 'caddyfileInCtr', label: 'Caddyfile 경로 — Caddy 컨테이너 안', mono: true, hint: 'caddy reload 가 읽는 파일 (보통 /etc/caddy/Caddyfile)' },
   ], { actions: [conn.btn], extra: modeHelp, onSaved: () => conn.run(true) });
   {
@@ -2355,8 +2430,8 @@ function renderAuthelia(panel) {
   const conn = connectionBlock('authelia', (r) => L.set('conn', r.status || 'fail', checkStateText(r)));
   const connForm = settingsForm([
     { key: 'autheliaContainer', label: 'Authelia 컨테이너', mono: true, hint: 'docker ps 에 보이는 이름', picker: 'container' },
-    { key: 'autheliaConfig', label: 'configuration.yml — 길목 컨테이너 안', mono: true },
-    { key: 'autheliaUsers', label: 'users_database.yml — 길목 컨테이너 안', mono: true },
+    { key: 'autheliaConfig', label: 'configuration.yml — 길목 컨테이너 안', mono: true, picker: 'file' },
+    { key: 'autheliaUsers', label: 'users_database.yml — 길목 컨테이너 안', mono: true, picker: 'file' },
     { key: 'autheliaCtrDir', label: 'config 폴더 — Authelia 컨테이너 안', mono: true, hint: '검증용 후보 파일을 이 폴더 기준으로 읽습니다 (보통 /config)' },
   ], { actions: [conn.btn], onSaved: () => conn.run(true) });
 

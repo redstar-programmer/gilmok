@@ -6,29 +6,97 @@ const STACK_STATE = { running: ['실행 중', 'ok'], exited: ['멈춤', 'warn'],
 
 async function loadStacks() { return api('GET', '/api/stacks'); }
 
+/** m:ss (or h:mm:ss) — language-neutral so the translated sentence around it still matches */
+function clockText(ms) {
+  const t = Math.max(0, Math.floor(ms / 1000));
+  const h2 = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const sec = String(t % 60).padStart(2, '0');
+  return h2 ? `${h2}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}
+
+/**
+ * Live line under a job log: elapsed time and time since the last output, ticking every second,
+ * so a long quiet step (image pull, build, waiting for start) still looks alive.
+ * update(job, serverNow) after each poll; lost(msg) when a poll fails (the job keeps going on the server).
+ */
+function jobPulse() {
+  const el = h('p', { class: 'job-pulse', 'aria-live': 'off' });
+  let job = null;
+  let skew = 0;
+  let timer = 0;
+  let lostMsg = '';
+  const stopTimer = () => { clearInterval(timer); timer = 0; };
+  const render = () => {
+    if (!job) { el.replaceChildren(); return; }
+    if (timer && el.dataset.shown && !el.isConnected) { stopTimer(); return; }
+    if (el.isConnected) el.dataset.shown = '1';
+    const started = Date.parse(job.started);
+    if (job.state !== 'running') {
+      stopTimer();
+      const took = job.ended && started ? Date.parse(job.ended) - started : 0;
+      el.replaceChildren(took > 0 ? h('span', null, '걸린 시간 ', h('span', { class: 'mono' }, clockText(took))) : h('span'));
+      return;
+    }
+    const now = Date.now() + skew;
+    const quiet = now - Date.parse(job.updated || job.started);
+    const parts = [h('span', { class: 'spinner', 'aria-hidden': 'true' }),
+      h('span', null, '경과 ', h('span', { class: 'mono' }, clockText(now - started)))];
+    if (lostMsg) parts.push(h('span', { class: 'quiet long' }, `서버 응답을 기다리는 중 — 작업은 서버에서 계속됩니다 (${lostMsg})`));
+    else if (quiet >= 300000) parts.push(h('span', { class: 'quiet long' }, `${clockText(quiet)} 동안 새 출력이 없습니다 — 네트워크가 느리거나 Docker가 응답하지 않을 수 있습니다. 서버에서 docker ps로 확인해 보세요.`));
+    else if (quiet >= 15000) parts.push(h('span', { class: 'quiet' }, `마지막 출력 ${clockText(quiet)} 전 — 이미지 받기·빌드·시작 확인 중에는 한동안 출력이 없을 수 있습니다.`));
+    el.replaceChildren(...parts);
+  };
+  el.update = (j, serverNow) => {
+    job = j;
+    lostMsg = '';
+    if (serverNow) skew = Date.parse(serverNow) - Date.now();
+    render();
+    if (j && j.state === 'running' && !timer) timer = setInterval(render, 1000);
+  };
+  el.lost = (msg) => { lostMsg = msg || '연결 끊김'; render(); };
+  return el;
+}
+
 /** job log viewer that follows a running job until it ends */
 function stackJobLog(name, onEnd) {
   const pre = h('pre', { class: 'log-view stack-log', 'aria-live': 'polite' });
   const head = h('div', { class: 'row' });
-  const box = h('div', { class: 'stack tight' }, head, pre);
+  const pulse = jobPulse();
+  const box = h('div', { class: 'stack tight' }, head, pre, pulse);
   let stop = false;
-  const paint = (j) => {
+  let lastLen = -1;
+  const paint = (j, serverNow) => {
     if (!j) return;
-    pre.textContent = (j.log || []).join('\n');
-    pre.scrollTop = pre.scrollHeight;
+    const log = j.log || [];
+    // repaint only when the text changed, and follow the end only if the reader is already there
+    if (log.length !== lastLen) {
+      const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 24;
+      pre.textContent = log.join('\n');
+      if (atEnd || lastLen < 0) pre.scrollTop = pre.scrollHeight;
+      lastLen = log.length;
+    }
     const [t, c] = j.state === 'running' ? ['진행 중…', 'warn'] : j.state === 'ok' ? ['완료', 'ok'] : ['실패', 'danger'];
     head.replaceChildren(h('b', null, `${stackActionLabel(j.action)}`), h('span', { class: `badge ${c}` }, t), j.error ? h('span', { class: 'small danger-text' }, j.error) : h('span'));
+    pulse.update(j, serverNow);
   };
+  let fails = 0;
   const tick = async () => {
     if (stop || !box.isConnected && box.dataset.started) return;
     box.dataset.started = '1';
-    try {
-      const r = await loadStacks();
-      const j = r.stacks[name] && r.stacks[name].job;
-      paint(j);
-      if (j && j.state === 'running') { setTimeout(tick, 1500); return; }
-      onEnd && onEnd(j);
-    } catch (ex) { pre.textContent += `\n${ex.message}`; }
+    let r;
+    try { r = await loadStacks(); } catch (ex) {
+      // a dropped poll does not mean the job failed: keep asking (the server runs it regardless)
+      fails++;
+      pulse.lost(ex.message);
+      setTimeout(tick, Math.min(10000, 1500 * fails));
+      return;
+    }
+    fails = 0;
+    const j = r.stacks[name] && r.stacks[name].job;
+    paint(j, r.now);
+    if (j && j.state === 'running') { setTimeout(tick, 1500); return; }
+    onEnd && onEnd(j);
   };
   box.start = () => { stop = false; tick(); };
   box.stop = () => { stop = true; };
@@ -54,7 +122,7 @@ function stackCard(name, onChanged) {
     const running = job && job.state === 'running';
     if (!rec) {
       const inst = h('button', { type: 'button', class: 'btn primary', disabled: !canSys || running, title: canSys ? '' : '「연결·시스템」 권한이 필요합니다' }, icon('plus'), `길목이 ${v.label} 설치…`);
-      inst.addEventListener('click', () => openStackInstall(name, v, () => draw()));
+      inst.addEventListener('click', () => openStackInstall(name, v, () => draw(), () => draw()));
       fill(box, h('div', { class: 'stack-intro' },
         h('div', { class: 'grow' }, h('b', null, `${v.label}가 아직 없나요?`),
           h('p', { class: 'small muted' }, `길목이 ${v.label}를 옆 컨테이너로 설치하고 아래 연결 정보까지 맞춥니다. 이미 실행 중인 ${v.label}가 있으면 아래에서 그 컨테이너에 연결하세요.`)),
@@ -190,7 +258,7 @@ function stackInstallFields(name, defaultContainer, o = {}) {
 }
 
 /** install dialog: options → preflight → install (background job with a live log) */
-function openStackInstall(name, v, onDone) {
+function openStackInstall(name, v, onDone, onStart) {
   const f = stackInstallFields(name, v.defaultContainer);
   const fields = f.fields;
   const opts = f.opts;
@@ -212,29 +280,41 @@ function openStackInstall(name, v, onDone) {
     checks.replaceChildren(h('h3', null, '사전 점검'), checkList({ checks: list }));
     return !list.some((c) => c.status === 'fail');
   };
-  pre.addEventListener('click', () => busy(pre, async () => { try { await runChecks(); } catch (ex) { toast(ex.message, 'err'); } }));
+  // phase: idle → running → done | idle (failed: fix and retry). busy() restores a button's
+  // disabled state when its handler returns, so the state is re-applied after every handler.
+  let phase = 'idle';
+  const lockForm = () => {
+    const off = phase !== 'idle';
+    for (const el of form.querySelectorAll('input,textarea,select,button')) if (!logBox.contains(el)) el.disabled = off;
+    pre.disabled = go.disabled = off;
+    if (phase === 'running') go.textContent = '설치 중…';
+    else if (phase === 'done') { go.textContent = '설치됨'; pre.hidden = true; close.className = 'btn primary'; }
+    else go.textContent = '다시 설치';
+  };
+  pre.addEventListener('click', () => busy(pre, async () => { try { await runChecks(); } catch (ex) { toast(ex.message, 'err'); } }).then(() => phase !== 'idle' && lockForm()));
   go.addEventListener('click', () => busy(go, async () => {
     try {
       if (read._pwCheck && read._pwCheck()) { toast('비밀번호 확인이 다릅니다', 'err'); return; }
       if (!(await runChecks())) { toast('사전 점검에서 막힌 항목을 먼저 고치세요', 'err'); return; }
       await api('POST', `/api/stacks/${name}/install`, opts());
-      pre.disabled = go.disabled = true;
-      for (const el of form.querySelectorAll('input,textarea,button')) if (!logBox.contains(el)) el.disabled = true;
+      phase = 'running';
+      onStart && onStart();
       const log = stackJobLog(name, async (j) => {
         await refreshState();
         if (j && j.state === 'ok') {
+          phase = 'done';
           toast(`${v.label}를 설치했습니다`);
-          logBox.append(callout('ok', h('b', null, '설치 완료'), h('span', { class: 'small' }, '연결 정보를 맞췄습니다. 서비스를 추가하고 「적용」하면 이 Caddy에 반영됩니다.')));
+          logBox.append(callout('ok', h('b', null, '설치 완료'), h('span', { class: 'small' }, '길목이 연결 정보(컨테이너 이름·설정 파일 경로)를 이미 맞췄습니다 — 컨테이너를 따로 고를 필요가 없습니다. 서비스를 추가하고 「적용」하면 반영됩니다.')));
         } else {
-          pre.disabled = go.disabled = false;
-          for (const el of form.querySelectorAll('input,textarea,button')) el.disabled = false;
+          phase = 'idle';
         }
+        lockForm();
         onDone && onDone(j);
       });
       logBox.replaceChildren(h('h3', null, '진행'), log);
       log.start();
     } catch (ex) { toast(ex.message, 'err', 8000); }
-  }));
+  }).then(() => phase !== 'idle' && lockForm()));
 }
 
 function caddyPrivOnUI() { return use('tailscale') || ((S.state && S.state.services) || []).some((s) => s.exposure !== 'public'); }
@@ -245,13 +325,21 @@ function privBindText(st) {
 }
 
 /** start an install and wait for it; onLog(job) gets every poll. Resolves the finished job. */
-async function runStackInstall(name, opts, onLog) {
+async function runStackInstall(name, opts, onLog, onLost) {
   await api('POST', `/api/stacks/${name}/install`, opts);
+  let fails = 0;
   for (;;) {
-    await new Promise((r) => setTimeout(r, 1500));
-    const r = await loadStacks();
+    await new Promise((r) => setTimeout(r, Math.min(10000, 1500 * (fails + 1))));
+    let r;
+    try { r = await loadStacks(); } catch (ex) {
+      // the install keeps running on the server; give up only after ~5 minutes without an answer
+      if (++fails > 40) throw ex;
+      if (onLost) onLost(ex.message);
+      continue;
+    }
+    fails = 0;
     const j = r.stacks[name] && r.stacks[name].job;
-    if (onLog) onLog(j);
+    if (onLog) onLog(j, r.now);
     if (j && j.state !== 'running') return j;
   }
 }

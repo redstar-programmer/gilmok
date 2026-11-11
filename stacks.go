@@ -88,6 +88,7 @@ type StackJob struct {
 	Log     []string  `json:"log"`
 	Err     string    `json:"error,omitempty"`
 	Started time.Time `json:"started"`
+	Updated time.Time `json:"updated"` // last log line — the UI shows "last output N s ago"
 	Ended   time.Time `json:"ended,omitempty"`
 }
 
@@ -101,6 +102,7 @@ func (m *stackMgr) logf(j *StackJob, format string, args ...any) {
 	line := fmt.Sprintf(format, args...)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	j.Updated = time.Now()
 	for _, l := range strings.Split(strings.TrimRight(line, "\n"), "\n") {
 		j.Log = append(j.Log, l)
 	}
@@ -130,6 +132,7 @@ func (a *App) startStackJob(r *http.Request, name, action string, fn func(log fu
 		return nil, fmt.Errorf("다른 작업(%s)이 진행 중입니다 — 끝난 뒤 다시 시도하세요", busy)
 	}
 	j := &StackJob{ID: newID(), Stack: name, Action: action, State: "running", Started: time.Now()}
+	j.Updated = j.Started
 	m.cur = j
 	if m.last == nil {
 		m.last = map[string]*StackJob{}
@@ -420,9 +423,9 @@ func (a *App) stackInstall(name string, o map[string]string, log func(string, ..
 			return fmt.Errorf("이미지 빌드 실패: %s", oneLine(lastLines(out, 2)))
 		}
 	} else {
-		log("$ docker compose pull")
-		if out, err := stackCompose(ctx, k, dir, env, "pull"); err != nil {
-			log("%s", lastLines(out, 6))
+		log("$ docker compose pull  (이미지 크기에 따라 몇 분 걸릴 수 있습니다)")
+		pctx := withLineSink(ctx, func(l string) { log("  %s", truncate(l, 200)) })
+		if out, err := stackCompose(pctx, k, dir, env, "pull"); err != nil {
 			return fmt.Errorf("이미지를 받지 못했습니다: %s", oneLine(lastLines(out, 2)))
 		}
 	}
@@ -565,7 +568,7 @@ func (a *App) getStacks(w http.ResponseWriter, r *http.Request) {
 	a.stk.mu.Lock()
 	cur := a.stk.cur
 	a.stk.mu.Unlock()
-	writeJSON(w, 200, map[string]any{"stacks": out, "running": cur != nil && cur.State == "running"})
+	writeJSON(w, 200, map[string]any{"stacks": out, "running": cur != nil && cur.State == "running", "now": time.Now()})
 }
 
 func (a *App) postStackPreflight(w http.ResponseWriter, r *http.Request) {
