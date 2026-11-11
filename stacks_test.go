@@ -625,3 +625,33 @@ func TestEnsureAcmeDNS(t *testing.T) {
 		}
 	}
 }
+
+// Importing an old Caddyfile into a Gilmok-installed Caddy keeps its base (DNS certificates, CA path,
+// Authelia snippet), points old Authelia upstreams at the managed Authelia and keeps the portal site.
+func TestImportIntoManagedStack(t *testing.T) {
+	f := newFullApp(t)
+	c := f.admin(t)
+	managedBase := "{\n\tacme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}\n}\n\n(cf_only) {\n\ttls {\n\t\tclient_auth {\n\t\t\ttrust_pool file /etc/caddy/certs/cf-origin-pull-ca.pem\n\t\t}\n\t}\n}\n"
+	f.set(func(d *Data) {
+		d.Settings.Domain, d.Settings.UseCaddy, d.Settings.UseAuthelia = "example.com", true, true
+		d.Settings.CaddyBase = managedBase
+		d.Stacks = map[string]*ManagedStack{"caddy": {Name: "caddy", Container: "gilmok-caddy", Dir: f.dir}, "authelia": {Name: "authelia", Container: "gilmok-authelia", Dir: f.dir}}
+		d.Services = []*Service{{ID: "p", Subdomain: "login", Upstream: "gilmok-authelia:9091", Exposure: ExposurePublic, Enabled: true, Authelia: AutheliaOpts{Policy: "two_factor"}}}
+	})
+	old := "{\n\temail a@b.c\n}\n(cf_only) {\n\ttls {\n\t\tclient_auth {\n\t\t\ttrust_pool file /etc/caddy/cf-origin-pull-ca.pem\n\t\t}\n\t}\n}\n" +
+		"auth.example.com {\n\timport cf_only\n\treverse_proxy authelia:9091\n}\n" +
+		"wiki.example.com {\n\treverse_proxy wiki:3000\n}\n"
+	body, _ := json.Marshal(map[string]string{"name": "Caddyfile", "content": old})
+	c.must(200, "POST", "/api/import", string(body))
+	d := f.app.store.Snapshot()
+	if d.Settings.CaddyBase != managedBase {
+		t.Fatalf("the managed base must be kept, got:\n%s", d.Settings.CaddyBase)
+	}
+	ups := map[string]string{}
+	for _, s := range d.Services {
+		ups[s.Subdomain] = s.Upstream
+	}
+	if ups["auth"] != "gilmok-authelia:9091" || ups["wiki"] != "wiki:3000" || ups["login"] != "gilmok-authelia:9091" {
+		t.Fatalf("services after import: %v", ups)
+	}
+}

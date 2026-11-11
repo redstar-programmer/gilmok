@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -351,4 +352,45 @@ func (a *App) caddyTokenChanged(r interface{ Context() context.Context }) {
 			a.logEvent("system", "info", "stack.token", "caddy", "관리형 Caddy에 바뀐 Cloudflare 토큰을 반영했습니다", nil)
 		}
 	}()
+}
+
+// caddyCAFile: where a managed Caddy's mTLS CA lives on Gilmok's side ("" = no managed Caddy).
+func (a *App) caddyCAFile() string {
+	rec := a.store.Snapshot().Stacks["caddy"]
+	if rec == nil {
+		return ""
+	}
+	return filepath.Join(rec.Dir, "conf", "certs", "cf-origin-pull-ca.pem")
+}
+
+// POST /api/stacks/caddy/ca {pem} — the Cloudflare Authenticated Origin Pulls CA for a managed Caddy
+// (cf_only / mTLS sites). Without it every mTLS site fails validation.
+func (a *App) postCaddyCA(w http.ResponseWriter, r *http.Request) {
+	path := a.caddyCAFile()
+	if path == "" {
+		fail(w, 404, errors.New("길목이 설치한 Caddy가 없습니다 — 직접 운영하는 Caddy는 그 컨테이너에 CA 파일을 마운트하세요"))
+		return
+	}
+	var in struct {
+		PEM string `json:"pem"`
+	}
+	if err := readJSON(r, &in); err != nil {
+		fail(w, 400, err)
+		return
+	}
+	ca := strings.TrimSpace(in.PEM)
+	if err := checkCAPEM(ca); err != nil {
+		fail(w, 400, err)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		fail(w, 500, err)
+		return
+	}
+	if err := os.WriteFile(path, []byte(ca+"\n"), 0o644); err != nil {
+		fail(w, 500, err)
+		return
+	}
+	a.auth.audit(r, "audit", "warn", "Caddy mTLS CA 저장", "caddy", "관리형 Caddy의 인증된 원본 풀 CA를 저장했습니다", nil)
+	writeJSON(w, 200, map[string]any{"ok": true})
 }

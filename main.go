@@ -27,7 +27,7 @@ import (
 //go:embed web
 var webFS embed.FS
 
-var version = "0.1.4"
+var version = "0.1.5"
 
 func main() {
 	dataDir := env("GM_DATA", "/data")
@@ -135,6 +135,8 @@ func (app *App) handler() http.Handler {
 	api.HandleFunc("POST /api/stacks/{name}/compose-check", app.postStackComposeCheck)
 	api.HandleFunc("POST /api/stacks/{name}/compose-reset", S(app.postStackComposeReset))
 	api.HandleFunc("GET /api/docker/networks", app.getDockerNetworks)
+	api.HandleFunc("POST /api/stacks/caddy/ca", S(app.postCaddyCA))
+	api.HandleFunc("POST /api/stacks/caddy/mtls", S(app.postCaddyMTLS))
 	api.HandleFunc("POST /api/stacks/{name}/{action}", S(app.postStackAction))
 	api.HandleFunc("POST /api/crowdsec/bouncer", S(app.postCSBouncer))
 	api.HandleFunc("POST /api/reset", S(app.postReset))
@@ -557,6 +559,37 @@ func (a *App) importExisting(w http.ResponseWriter, r *http.Request) {
 				svcs = append(svcs, &Service{ID: newID(), Subdomain: sub, Exposure: ExposureTailscale, DNSOnly: true,
 					Enabled: true, ManageDNS: true, Notes: "DNS 전용 (Caddy 사이트 없음)", Authelia: AutheliaOpts{Policy: "two_factor"}})
 				managed = append(managed, rec.Name)
+			}
+		}
+	}
+	// a Caddy Gilmok installed: its base (certificate method, mTLS CA path, Authelia snippet) fits that
+	// container — keep it, and point imported Authelia sites at the Authelia Gilmok installed
+	d0 := a.store.Snapshot()
+	if d0.Stacks["caddy"] != nil && strings.TrimSpace(d0.Settings.CaddyBase) != "" {
+		base = d0.Settings.CaddyBase
+		warns = append([]string{"길목이 설치한 Caddy라 기본 골격(전역 옵션·스니펫)은 지금 것을 그대로 두고 사이트만 가져왔습니다 — 가져온 파일의 전역 옵션이 더 필요하면 Caddy 탭 › 전역 설정에서 옮기세요"}, warns...)
+	}
+	if arec := d0.Stacks["authelia"]; arec != nil {
+		target := arec.Container + ":9091"
+		for _, s := range svcs {
+			h := strings.ToLower(upstreamHost(s.Upstream))
+			if h != strings.ToLower(arec.Container) && strings.Contains(h, "authelia") && strings.HasSuffix(s.Upstream, ":9091") {
+				warns = append(warns, fmt.Sprintf("%s: 대상 %s → %s (길목이 설치한 Authelia)", s.Subdomain, s.Upstream, target))
+				s.Upstream = target
+			}
+		}
+		// the login portal site Gilmok added must survive the import
+		for _, old := range d0.Services {
+			if !strings.EqualFold(upstreamHost(old.Upstream), arec.Container) {
+				continue
+			}
+			found := false
+			for _, s := range svcs {
+				found = found || s.Subdomain == old.Subdomain
+			}
+			if !found {
+				cp := *old
+				svcs = append(svcs, &cp)
 			}
 		}
 	}

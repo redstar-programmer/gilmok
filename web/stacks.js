@@ -107,6 +107,50 @@ function stackJobLog(name, onEnd) {
 /** tell other views (the setup wizard's connection fields) that a stack job started or ended */
 const stackEvent = (name) => document.dispatchEvent(new CustomEvent('gm:stack', { detail: { name } }));
 
+/** upload the Cloudflare Authenticated Origin Pulls CA (PEM) into a managed Caddy — mTLS sites need it */
+function openCaddyCA(onDone) {
+  const ta = h('textarea', { class: 'code', rows: '8', spellcheck: 'false', placeholder: '-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----', 'aria-label': 'CA 인증서 (PEM)' });
+  const pick = h('button', { type: 'button', class: 'btn' }, icon('upload'), '파일 고르기…');
+  const err = h('p', { class: 'form-error', role: 'alert', hidden: true });
+  const save = h('button', { type: 'button', class: 'btn primary' }, '저장');
+  const close = h('button', { type: 'button', class: 'btn ghost' }, '닫기');
+  const gen = h('button', { type: 'button', class: 'choice-btn' }, icon('key'),
+    h('span', null, h('b', null, '길목이 새로 만들기 (권장)'),
+      h('small', null, '길목이 CA와 클라이언트 인증서를 만들어, 클라이언트 인증서는 Cloudflare(이 존의 인증된 원본 풀)에 올리고 켜고, CA는 이 Caddy에 넣습니다. 개인 키는 길목에 남기지 않습니다. 토큰에 「영역 · SSL 및 인증서 · 편집」 권한이 필요합니다.')));
+  const genErr = h('p', { class: 'form-error', role: 'alert', hidden: true });
+  const d = openDialog({ title: 'mTLS CA (인증된 원본 풀)', size: 'wide', body: h('div', { class: 'stack' },
+    h('p', { class: 'small muted' }, 'Proxied·mTLS 사이트는 Cloudflare가 보여 주는 클라이언트 인증서를 이 CA로 확인합니다 — 이 존을 거친 요청만 들어옵니다.'),
+    h('div', { class: 'stack choice-list' }, gen, genErr),
+    h('details', null, h('summary', { class: 'small' }, '이미 쓰는 CA가 있으면 직접 넣기'),
+      h('div', { class: 'stack tight', style: { marginTop: '8px' } },
+        h('p', { class: 'hint' }, 'Cloudflare SSL/TLS › 원본 서버 › 인증된 원본 풀에 이미 올린 클라이언트 인증서의 CA(PEM) — 예전 Caddy를 쓰셨다면 그 폴더의 cf-origin-pull-ca.pem 입니다.'),
+        h('div', { class: 'row' }, pick, h('span', { class: 'hint' }, '또는 아래에 붙여넣기')), ta, err, h('div', { class: 'row' }, save)))),
+    footer: [close] });
+  gen.addEventListener('click', async () => {
+    const ok = await confirmDialog({ title: 'mTLS 새로 만들기', okText: '만들기', message:
+      '이 존(Cloudflare)의 인증된 원본 풀 인증서를 길목이 만든 것으로 바꿉니다.\n\n이 존에 이미 다른 클라이언트 인증서를 올려 두었다면 Cloudflare는 새 것을 쓰므로, 예전 CA를 믿는 다른 서버의 mTLS 사이트는 접속이 끊깁니다.\nCloudflare가 새 인증서를 배포하는 데 몇 분 걸릴 수 있습니다.' });
+    if (!ok) return;
+    genErr.hidden = true;
+    try {
+      const r = await busy(gen, () => api('POST', '/api/stacks/caddy/mtls', {}));
+      toast(`mTLS를 만들었습니다 — Cloudflare 상태: ${r.status || '?'} · 「적용」하면 mTLS 사이트가 검증을 통과합니다`, 'ok', 9000);
+      d.close();
+      if (onDone) onDone();
+    } catch (ex) { genErr.textContent = ex.message; genErr.hidden = false; }
+  });
+  close.addEventListener('click', () => d.close());
+  pick.addEventListener('click', async () => { const f = await pickLocalText('.pem,.crt,.cer'); if (f) ta.value = f.content; });
+  save.addEventListener('click', () => busy(save, async () => {
+    err.hidden = true;
+    try {
+      await api('POST', '/api/stacks/caddy/ca', { pem: ta.value });
+      toast('mTLS CA를 저장했습니다 — 「적용」하면 mTLS 사이트가 검증을 통과합니다');
+      d.close();
+      if (onDone) onDone();
+    } catch (ex) { err.textContent = ex.message; err.hidden = false; }
+  }));
+}
+
 const stackActionLabel = (a) => ({ install: '설치', start: '시작', stop: '정지', restart: '재시작', remove: '제거', compose: 'compose 적용' }[a] || a);
 
 /** the managed-stack card for one component */
@@ -165,6 +209,11 @@ function stackCard(name, onChanged) {
           !v.state ? btn('다시 설치', 'install', 'primary', `${rec.container} 컨테이너가 없습니다 (누군가 지웠거나 Docker가 정리함). 폴더의 설정·데이터를 그대로 써서 다시 만듭니다.`)
             : v.state !== 'running' ? btn('시작', 'start', 'primary') : btn('재시작', 'restart', '', '컨테이너를 다시 시작합니다. 잠깐 사이트가 끊깁니다.'),
           v.state === 'running' ? btn('정지', 'stop', '', '정지하면 이 구성요소를 쓰는 모든 사이트가 멈춥니다.') : null,
+          name === 'caddy' ? (() => {
+            const b = h('button', { type: 'button', class: 'btn sm', disabled: !canSys || running, title: 'Proxied·mTLS 사이트가 쓰는 Cloudflare 인증된 원본 풀 CA' }, 'mTLS CA…');
+            b.addEventListener('click', () => openCaddyCA(() => draw()));
+            return b;
+          })() : null,
           (() => {
             const b = h('button', { type: 'button', class: 'btn sm', disabled: !canSys || running, title: '네트워크·포트·볼륨 등을 이 환경에 맞게 고칩니다' }, 'compose 편집…');
             b.addEventListener('click', () => openComposeEditor(name, v.label, () => draw()));

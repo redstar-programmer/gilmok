@@ -108,7 +108,7 @@ docker compose pull
 docker compose up -d
 ```
 
-설정과 로그는 `./data`에 남아 있습니다. 버전을 고정하려면 compose 파일의 이미지를 `vitive/gilmok:0.1.4`처럼 바꾸세요.
+설정과 로그는 `./data`에 남아 있습니다. 버전을 고정하려면 compose 파일의 이미지를 `vitive/gilmok:0.1.5`처럼 바꾸세요.
 
 ## 환경변수
 
@@ -131,7 +131,7 @@ docker compose up -d
 | `GM_DATA` | 데이터 폴더 | `/data` |
 | `TZ` | 시간대 | `UTC` |
 
-Cloudflare 토큰에는 `Zone · Zone · Read`와 `Zone · DNS · Edit` 권한이 필요합니다. WAF 규칙을 쓰려면 `Zone · Zone WAF · Edit`, 엣지 이벤트를 보려면 `Zone · Analytics · Read`, CrowdSec 차단 목록을 쓰려면 `Account · Account Filter Lists · Edit`를 더 넣으세요. 토큰은 저장하기 전에 실제로 조회해서 확인합니다.
+Cloudflare 토큰에는 `Zone · Zone · Read`와 `Zone · DNS · Edit` 권한이 필요합니다. WAF 규칙을 쓰려면 `Zone · Zone WAF · Edit`, 엣지 이벤트를 보려면 `Zone · Analytics · Read`, CrowdSec 차단 목록을 쓰려면 `Account · Account Filter Lists · Edit`, 길목이 mTLS 인증서를 만들게 하려면 `Zone · SSL and Certificates · Edit`를 더 넣으세요. 토큰은 저장하기 전에 실제로 조회해서 확인합니다.
 
 ## 알아 둘 점
 

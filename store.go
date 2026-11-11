@@ -241,6 +241,7 @@ type Data struct {
 	DDNS          DDNSStatus               `json:"ddns"`          // last DDNS run (shown in the Cloudflare tab)
 	Pending       []string                 `json:"pending"`       // human-readable list of saved-but-unapplied changes
 	CFWAF         CFWAFState               `json:"cfWaf"`
+	MTLS          MTLSState                `json:"mtls"`                  // Cloudflare client certificate Gilmok made (mtls.go)
 	Dashboard     []Widget                 `json:"dashboard"`             // nil = default layout
 	ProxySecret   string                   `json:"proxySecret"`           // header Caddy adds for Gilmok's own site (never sent to the UI)
 	TOTPSecret    string                   `json:"totpSecret,omitempty"`  // before accounts (migrated)

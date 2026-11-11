@@ -214,6 +214,11 @@ function setupFixFor(target, c, det, rerun, leave) {
     }));
     return h('div', { class: 'fix-box row' }, h('span', { class: 'grow' }, `${st.crowdsecContainer || 'CrowdSec'} 컨테이너에서 cscli bouncers add 로 길목용 키를 만들어 저장합니다 (키는 화면에 나오지 않음).`), b);
   }
+  if (key === 'caddy/ca') {
+    const b = h('button', { type: 'button', class: 'btn sm primary' }, 'mTLS 만들기·넣기…');
+    b.addEventListener('click', () => openCaddyCA(() => rerun(false)));
+    return h('div', { class: 'fix-box row' }, h('span', { class: 'grow' }, '길목이 mTLS 인증서를 새로 만들어 Cloudflare와 이 Caddy에 넣거나, 이미 쓰는 CA(PEM)를 넣습니다.'), b);
+  }
   if (key === 'cloudflare/zone' && !st.domain) return inputFix('도메인', 'domain', '예: example.com', true);
   if (key === 'cloudflare/ts') {
     const box = inputFix(use('tailscale') ? 'Tailscale IP' : '사설 IP', 'tailscaleIp', '예: 100.64.0.10', false);
@@ -477,8 +482,17 @@ function showSetupResult(d, sel, imported, det) {
   items.push(h('h3', null, '연결 확인'), setupChecks(sel, det, () => d.close(true)));
   d.body.replaceChildren(h('div', { class: 'stack' }, ...items));
   const foot = d.panel.querySelector('.dlg-foot');
-  if (foot) foot.replaceChildren(h('span', { class: 'grow' }), done);
-  done.addEventListener('click', () => { d.close(); S.checks = {}; selectTab('services'); });
+  // quick setup ends like the wizard: straight on to preview → apply when something is pending
+  const hasPending = () => ((S.state && S.state.pending) || []).length > 0;
+  const later = h('button', { type: 'button', class: 'btn ghost' }, '나중에 적용');
+  if (hasPending()) done.textContent = '적용…';
+  if (foot) fill(foot, h('span', { class: 'grow' }), hasPending() ? later : null, done);
+  later.addEventListener('click', () => { d.close(); S.checks = {}; selectTab('services'); });
+  done.addEventListener('click', async () => {
+    d.close(); S.checks = {}; selectTab('services');
+    await refreshState();
+    if (hasPending()) openApply();
+  });
   done.focus();
 }
 
@@ -704,7 +718,7 @@ async function openSetupWizard() {
         body: h('div', { class: 'stack' },
           imported && !imported.error ? callout('ok', `서비스 ${imported.imported}개를 가져왔습니다.`) : null,
           setupChecks(sel, det, () => d.close(true)),
-          callout('', h('b', null, '아직 실제로 바뀐 것은 없습니다'), h('span', { class: 'small' }, '서비스를 확인한 뒤 위쪽 「적용」에서 미리보기 → 적용하세요.'))),
+          callout('', h('b', null, '아직 실제로 바뀐 것은 없습니다'), h('span', { class: 'small' }, '「마치고 적용…」을 누르면 바뀌는 내용을 미리 보여 준 뒤 Caddy·Authelia·DNS에 적용합니다. 검증에서 걸리면 아무것도 바뀌지 않습니다.'))),
         save: () => setupFinish(),
       };
     },
@@ -727,14 +741,22 @@ async function openSetupWizard() {
     body.replaceChildren(rail, h('div', { class: 'stack' }, h('h3', null, `${idx + 1}. ${s.title}`), h('p', { class: 'muted' }, cur.lead), cur.body, err));
     prev.disabled = idx === 0;
     skip.hidden = s.id === 'comp' || s.id === 'domain' || s.id === 'done';
-    next.textContent = s.id === 'done' ? '마치기' : '다음 →';
+    next.textContent = s.id === 'done' ? (((S.state && S.state.pending) || []).length ? '마치고 적용…' : '마치기') : '다음 →';
   };
   prev.addEventListener('click', () => { idx = Math.max(0, idx - 1); render(); });
   skip.addEventListener('click', () => { idx++; render(); });
   next.addEventListener('click', () => busy(next, async () => {
     try {
       await cur.save();
-      if (steps()[idx].id === 'done') { d.close(true); S.checks = {}; toast('설정을 마쳤습니다 — 서비스를 확인하고 「적용」하세요'); selectTab('services'); return; }
+      if (steps()[idx].id === 'done') {
+        d.close(true);
+        S.checks = {};
+        selectTab('services');
+        await refreshState();
+        if (((S.state && S.state.pending) || []).length) openApply(); // preview → apply right away
+        else toast('설정을 마쳤습니다');
+        return;
+      }
       idx++;
       render();
     } catch (ex) { err.textContent = ex.message; err.hidden = false; }

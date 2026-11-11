@@ -213,6 +213,19 @@ func (a *App) checkCaddy() CheckResult {
 					proxied++
 				}
 			}
+			mtls := 0
+			for _, s := range a.store.Snapshot().Services {
+				if s.Enabled && !s.DNSOnly && s.Exposure == ExposurePublic && s.Proxied && s.MTLS {
+					mtls++
+				}
+			}
+			if ca := a.caddyCAFile(); ca != "" && mtls > 0 {
+				if _, err := os.Stat(ca); err != nil {
+					r.add("ca", "mTLS CA (인증된 원본 풀)", "fail", fmt.Sprintf("mTLS 사이트가 %d개인데 이 Caddy에 Cloudflare 인증된 원본 풀 CA 파일이 없습니다 — 적용할 때 검증에서 걸립니다. 「mTLS 만들기·넣기」에서 길목이 새로 만들거나 PEM을 넣으세요", mtls))
+				} else {
+					r.add("ca", "mTLS CA (인증된 원본 풀)", "ok", "conf/certs/cf-origin-pull-ca.pem")
+				}
+			}
 			if proxied > 0 && !reCertConfigured.MatchString(string(b)) {
 				r.add("acme", "인증서 발급 방식", "fail", fmt.Sprintf("Proxied 사이트 %d개의 인증서를 받을 수 없습니다 — Cloudflare를 거치면 HTTP 인증이 막혀 525가 납니다. Caddy 탭 › 전역 설정 › 기본 골격의 전역 옵션에 acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN} 를 넣고 적용하세요 (Caddy 컨테이너에 CLOUDFLARE_API_TOKEN 필요)", proxied))
 			} else if proxied > 0 {

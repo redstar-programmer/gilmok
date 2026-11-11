@@ -108,7 +108,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Settings and logs stay in `./data`. To pin a version, change the image in the compose file to something like `vitive/gilmok:0.1.4`.
+Settings and logs stay in `./data`. To pin a version, change the image in the compose file to something like `vitive/gilmok:0.1.5`.
 
 ## Environment variables
 
@@ -131,7 +131,7 @@ These are only first-start defaults; after that, what you change in the UI wins.
 | `GM_DATA` | Data folder | `/data` |
 | `TZ` | Time zone | `UTC` |
 
-The Cloudflare token needs `Zone · Zone · Read` and `Zone · DNS · Edit`. Add `Zone · Zone WAF · Edit` for WAF rules, `Zone · Analytics · Read` for edge events and `Account · Account Filter Lists · Edit` for the CrowdSec block list. The token is checked against Cloudflare before it's saved.
+The Cloudflare token needs `Zone · Zone · Read` and `Zone · DNS · Edit`. Add `Zone · Zone WAF · Edit` for WAF rules, `Zone · Analytics · Read` for edge events `Account · Account Filter Lists · Edit` for the CrowdSec block list and `Zone · SSL and Certificates · Edit` to let Gilmok create the mTLS certificates. The token is checked against Cloudflare before it's saved.
 
 ## Good to know
 
