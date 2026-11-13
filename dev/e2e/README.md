@@ -10,6 +10,8 @@ docker run -d --name gm-e2e -p 127.0.0.1:18095:8080 --add-host host.docker.inter
 cd dev/e2e
 python fresh_install.py      # 1부: 언어 → 관리자 → Caddy(네트워크 지정) → Authelia(네트워크 비움) → CrowdSec → 서비스 → 점검 → 적용 → 실제 접속
 python old_caddyfile.py      # 2부: 예전 Caddyfile → CA 없이 적용(mTLS 보류) → CA 넣고 적용 → mTLS 실제 확인
+# 또는 1부 다음에 기능 전체 통합 테스트(91건, 마지막에 초기화하므로 2부와는 따로)
+python integration.py
 
 # 정리
 docker rm -f gm-e2e e2e-caddy e2e-authelia e2e-crowdsec
