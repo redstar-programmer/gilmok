@@ -325,8 +325,8 @@ async function openQuickSetup() {
       mode[k] = seg.get();
       connBox.hidden = mode[k] !== 'connect' || installed[k];
       instBox.hidden = mode[k] !== 'install';
-      note.textContent = installed[k] ? `길목이 이미 설치한 ${c.name}가 있습니다 — 그대로 씁니다.`
-        : mode[k] === 'install' ? `「이대로 시작」을 누르면 길목이 ${c.name}를 옆 컨테이너로 설치하고 연결합니다${k === 'caddy' ? ' (이미지 빌드 2~5분)' : ''}.`
+      note.textContent = installed[k] ? `길목이 이미 설치한 ${c.name} 컨테이너가 있습니다 — 그대로 씁니다.`
+        : mode[k] === 'install' ? `「이대로 시작」을 누르면 길목이 ${c.name} 컨테이너를 옆에 설치하고 연결합니다${k === 'caddy' ? ' (이미지 빌드 2~5분)' : ''}.`
           : !det.docker ? 'Docker에 연결하지 못해 설치는 고를 수 없습니다.' : '';
       syncAll();
     };
@@ -596,7 +596,7 @@ async function openSetupWizard() {
         !Object.values(sel).some(Boolean) ? callout('', '아무것도 고르지 않으면 길목은 대시보드·로그·보안 기능만 씁니다.') : null);
       sync();
       return {
-        lead: '이 서버에서 실제로 쓰는 것만 고르세요. 고르지 않은 구성요소는 탭과 설정이 숨겨지고 길목이 건드리지 않습니다.' + (det.docker ? ' (찾은 컨테이너를 보고 미리 골라 두었습니다)' : ''),
+        lead: '이 서버에서 실제로 쓰는 것만 고르세요. 고르지 않은 구성요소는 탭과 설정이 숨겨지고 길목이 건드리지 않습니다.' + (det.docker && fresh && COMPONENTS.some((c) => sg[c.flag]) ? ' (찾은 컨테이너를 보고 미리 골라 두었습니다)' : ''),
         body: h('div', { class: 'stack' }, compCards(sel, () => { sync(); drawRail(); }), warn),
         save: () => setupSave(Object.fromEntries(COMPONENTS.map((c) => [c.flag, !!sel[c.key]]))),
       };

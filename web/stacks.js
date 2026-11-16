@@ -171,8 +171,8 @@ function stackCard(name, onChanged) {
       const inst = h('button', { type: 'button', class: 'btn primary', disabled: !canSys || running, title: canSys ? '' : '「연결·시스템」 권한이 필요합니다' }, icon('plus'), `길목이 ${v.label} 설치…`);
       inst.addEventListener('click', () => openStackInstall(name, v, () => { stackEvent(name); draw(); }, () => { stackEvent(name); draw(); }));
       fill(box, h('div', { class: 'stack-intro' },
-        h('div', { class: 'grow' }, h('b', null, `${v.label}가 아직 없나요?`),
-          h('p', { class: 'small muted' }, `길목이 ${v.label}를 옆 컨테이너로 설치하고 아래 연결 정보까지 맞춥니다. 이미 실행 중인 ${v.label}가 있으면 아래에서 그 컨테이너에 연결하세요.`)),
+        h('div', { class: 'grow' }, h('b', null, `${v.label} 컨테이너가 아직 없나요?`),
+          h('p', { class: 'small muted' }, `길목이 ${v.label} 컨테이너를 옆에 설치하고 아래 연결 정보까지 맞춥니다. 이미 실행 중인 ${v.label} 컨테이너가 있으면 아래에서 그 컨테이너에 연결하세요.`)),
         inst),
       job && (running || job.state === 'fail') ? log : null);
       if (running) log.start();
@@ -255,7 +255,8 @@ function stackInstallFields(name, defaultContainer, o = {}) {
     if (name === 'caddy') {
       // Caddy goes where the service containers already are
       const best = (nets.networks || []).slice().sort((a, b) => (counts[b] || 0) - (counts[a] || 0))[0];
-      if (!best || !(counts[best] > 0)) { fill(netAdvice, h('p', { class: 'hint' }, '아직 서비스 컨테이너가 있는 네트워크가 없습니다 — 비워 두면 길목이 쓰는 네트워크에 설치합니다.')); return; }
+      if (v && !(nets.networks || []).includes(v)) { fill(netAdvice, h('p', { class: 'hint' }, `${v} 는 아직 없는 네트워크라 새로 만들고 길목도 연결합니다. 나중에 서비스 컨테이너도 이 네트워크에 붙여야 Caddy가 이름으로 찾아갑니다.`)); return; }
+      if (!best || !(counts[best] > 0)) { fill(netAdvice, h('p', { class: 'hint' }, v ? `✓ ${v} 네트워크에 설치합니다.` : '아직 서비스 컨테이너가 있는 네트워크가 없습니다 — 비워 두면 길목이 쓰는 네트워크에 설치합니다.')); return; }
       if (!v) {
         fill(netAdvice, callout('', h('b', null, `추천: ${best}`), h('span', { class: 'small' }, `컨테이너 ${counts[best]}개가 있는 네트워크입니다. 서비스 컨테이너들과 같은 네트워크여야 Caddy가 이름(예: 컨테이너:포트)으로 찾아갑니다.`), useBtn(best)));
       } else if (v !== best && (counts[v] || 0) < counts[best]) {
@@ -375,7 +376,7 @@ function openStackInstall(name, v, onDone, onStart) {
   const go = h('button', { type: 'button', class: 'btn primary' }, '설치');
   const close = h('button', { type: 'button', class: 'btn ghost' }, '닫기');
   const form = h('div', { class: 'stack' },
-    callout('', h('b', null, `길목이 ${v.label}를 옆 컨테이너로 설치합니다`),
+    callout('', h('b', null, `길목이 ${v.label} 컨테이너를 옆에 설치합니다`),
       h('span', { class: 'small' }, `파일은 길목 데이터 폴더 아래 stacks/${name} 에 만들고, 설치가 끝나면 길목의 연결 정보를 자동으로 맞춥니다.${name === 'caddy' ? ' 처음엔 Caddy 이미지를 빌드하느라 2~5분 걸립니다.' : ''}`)),
     h('div', { class: 'stack' }, fields), checks, logBox);
   const d = openDialog({ title: `${v.label} 설치`, size: 'wide', body: form, footer: [close, h('span', { class: 'grow' }), pre, go] });
@@ -409,7 +410,7 @@ function openStackInstall(name, v, onDone, onStart) {
         await refreshState();
         if (j && j.state === 'ok') {
           phase = 'done';
-          toast(`${v.label}를 설치했습니다`);
+          toast(`${v.label} 설치를 마쳤습니다`);
           logBox.append(callout('ok', h('b', null, '설치 완료'), h('span', { class: 'small' }, '길목이 연결 정보(컨테이너 이름·설정 파일 경로)를 이미 맞췄습니다 — 컨테이너를 따로 고를 필요가 없습니다. 서비스를 추가하고 「적용」하면 반영됩니다.')));
         } else {
           phase = 'idle';

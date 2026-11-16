@@ -13,3 +13,4 @@ metrics.json
 # local only: notes about the author's own server (not part of the project)
 CLAUDE.md
 reference/
+__pycache__/
