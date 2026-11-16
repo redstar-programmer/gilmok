@@ -772,6 +772,8 @@ go test -count=1 -run 'Groups|Bulk' ./...   # 일부
 | FRESH-21 | CA 없는 mTLS 보류 | 관리형 Caddy, CA 없음 → CA 넣음 | 보류·적용 대기 유지 → 적용·대기 비움 | P1 | ✅ `TestApplyHoldsMTLSWithoutCA` |
 | FRESH-22 | 관리형에 가져오기 | 예전 Caddyfile을 관리형 Caddy·Authelia 위에 | 골격 유지·맞춤, Authelia 대상 교체, 포털 유지 | P1 | ✅ `TestImportIntoManagedStack` |
 | FRESH-23 | 탭에서만 설정 | 마법사 없이 적용 성공 | 설정 완료로 기록(로그인 때 설정 제안 안 띄움) | P2 | ✅ `TestFreshApplyMarksSetupDone` |
+| FRESH-24 | 설치 때 첫 Caddyfile도 보류 | mTLS 사이트가 있는데 CA 없음 → 관리형 Caddy 설치 | mTLS 사이트만 빼고 씀, 설치 성공(운영 첫 설치에서 컨테이너가 재시작 반복) | P1 | ✅ `TestFreshInstallHoldsMTLS` + 실제 Docker 재현 4/4 |
+| FRESH-25 | 설치 실패 원인 | 컨테이너가 바로 멈춤 | 정리 전에 로그 30줄을 작업 로그에, 원인 줄(error/fatal)을 오류 메시지에 | P1 | ✅ `TestFreshCrashReason` |
 | E2E-01~22 | 실제 처음 설치 | 실제 Docker: 언어 → 관리자 → Caddy(네트워크 지정·내부 인증서) → Authelia(네트워크 비움) → CrowdSec → 서비스 → 점검 → 적용 → 실제 접속 → CrowdSec 재시작 → 보류 | 전부 통과 | P1 | ✅ 24/24 (2026-11-11, 실제 Docker) |
 | E2E-P2-01~14 | 예전 Caddyfile → 관리형 스택 | PC 파일 가져오기 → CA 없이 적용(mTLS 보류) → 잘못된 PEM → CA 넣고 적용 → 클라이언트 인증서 없는 접속 거부 → 점검 | 전부 통과 | P1 | ✅ 14/14 (2026-11-11, 실제 Docker) |
 

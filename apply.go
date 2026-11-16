@@ -558,12 +558,18 @@ func pruneBackups(root string, keep int) {
 //
 // Held sites are never served half-configured (e.g. without the mTLS check). Returns "sub (reason)".
 func (a *App) caddyGenData(d Data) (Data, []string) {
+	return caddyGenDataCA(d, a.caddyCAFile())
+}
+
+// caddyGenDataCA: caddyGenData with the managed Caddy's CA file given ("" = not a managed Caddy) —
+// the install writes its first Caddyfile before the stack record exists.
+func caddyGenDataCA(d Data, ca string) (Data, []string) {
 	defined := map[string]bool{}
 	for _, m := range reSnippetDef.FindAllStringSubmatch(d.Settings.CaddyBase, -1) {
 		defined[m[1]] = true
 	}
 	caMissing := false
-	if ca := a.caddyCAFile(); ca != "" {
+	if ca != "" {
 		if _, err := os.Stat(ca); err != nil {
 			caMissing = true
 		}

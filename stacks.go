@@ -480,22 +480,41 @@ func (a *App) stackInstall(name string, o map[string]string, log func(string, ..
 		cleanup()
 		return fmt.Errorf("컨테이너를 시작하지 못했습니다: %s", oneLine(lastLines(out, 2)))
 	}
-	// wait until it stays up
+	// the container's own words, kept before cleanup removes it: the last lines go to the job log and
+	// the most telling one (error / fatal) into the error message
+	crash := func() string {
+		logs, _ := docker(context.Background(), nil, nil, "logs", "--tail", "30", ctr)
+		if strings.TrimSpace(logs) == "" {
+			return ""
+		}
+		log("• %s 컨테이너 로그 (마지막 30줄):", k.Label)
+		log("%s", logs)
+		return crashReason(logs)
+	}
+	// wait until it stays up (a crash-looping container is "running" for a moment between restarts)
 	state := ""
-	for i := 0; i < 20; i++ {
+	steady := 0
+	for i := 0; i < 20 && steady < 3; i++ {
 		time.Sleep(time.Second)
-		if state, _ = ctrStateOf(ctx, ctr); state == "running" && i >= 2 {
-			break
+		if state, _ = ctrStateOf(ctx, ctr); state == "running" {
+			steady++
+		} else {
+			steady = 0
 		}
 	}
-	if state != "running" {
-		logs, _ := docker(ctx, nil, nil, "logs", "--tail", "15", ctr)
-		log("%s", logs)
+	if state != "running" || steady < 3 {
+		why := crash()
 		cleanup()
+		if why != "" {
+			return fmt.Errorf("%s 컨테이너가 시작하자마자 멈춥니다 (%s): %s", k.Label, state, why)
+		}
 		return fmt.Errorf("컨테이너가 실행 상태가 아닙니다 (%s) — 위 로그를 확인하세요", state)
 	}
 	if k.verify != nil {
 		if err := k.verify(a, ctr); err != nil {
+			if why := crash(); why != "" && !strings.Contains(err.Error(), why) {
+				err = fmt.Errorf("%v — 컨테이너 로그: %s", err, why)
+			}
 			cleanup()
 			return err
 		}
@@ -671,4 +690,30 @@ func (k *stackKind) validate(a *App, o map[string]string) error {
 		return nil
 	}
 	return k.check(a, o)
+}
+
+// crashReason: the line of a container log that says why it stopped (Caddy / Authelia / CrowdSec all
+// log JSON or logfmt with an error / fatal level), shortened. "" when nothing stands out.
+func crashReason(logs string) string {
+	lines := strings.Split(strings.TrimSpace(logs), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := strings.TrimSpace(lines[i])
+		low := strings.ToLower(l)
+		if strings.Contains(low, `"level":"error"`) || strings.Contains(low, `"level":"fatal"`) || strings.Contains(low, "level=fatal") ||
+			strings.Contains(low, "level=error") || strings.HasPrefix(low, "error:") || strings.HasPrefix(low, "panic:") {
+			// JSON log: the msg / error field reads better than the whole line
+			var j map[string]any
+			if json.Unmarshal([]byte(l), &j) == nil {
+				msg, _ := j["msg"].(string)
+				if e, ok := j["error"].(string); ok && e != "" {
+					msg = strings.TrimSpace(msg + ": " + e)
+				}
+				if msg != "" {
+					l = msg
+				}
+			}
+			return truncate(l, 400)
+		}
+	}
+	return ""
 }

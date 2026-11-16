@@ -213,7 +213,13 @@ func renderCaddyStack(a *App, o map[string]string, dir, host, network, ctr strin
 		log("  기본 골격(전역 옵션·cf_only·authelia 스니펫) 만듦")
 	}
 	d := a.store.Snapshot()
-	if err := os.WriteFile(filepath.Join(dir, "conf", "Caddyfile"), []byte(GenerateCaddyfile(d)), 0o644); err != nil {
+	// sites Caddy could not load yet (mTLS without the CA, a snippet the base lacks) are held, the same
+	// as on apply — otherwise one of them keeps the new container crash-looping
+	gen, held := caddyGenDataCA(d, filepath.Join(dir, "conf", "certs", "cf-origin-pull-ca.pem"))
+	if len(held) > 0 {
+		log("  %s", mtlsHeldText(held))
+	}
+	if err := os.WriteFile(filepath.Join(dir, "conf", "Caddyfile"), []byte(GenerateCaddyfile(gen)), 0o644); err != nil {
 		return err
 	}
 	log("  Caddyfile 생성 (서비스 %d개)", len(d.Services))

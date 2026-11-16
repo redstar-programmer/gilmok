@@ -335,3 +335,48 @@ func TestFreshApplyMarksSetupDone(t *testing.T) {
 		t.Fatal("FRESH-23 SetupDone not set by a successful apply")
 	}
 }
+
+// FRESH-24: the first Caddyfile of a managed Caddy holds what Caddy could not load yet (an mTLS site
+// before the CA exists) — on a real first install it crash-looped the new container
+func TestFreshInstallHoldsMTLS(t *testing.T) {
+	f := newFullApp(t)
+	boss := f.admin(t)
+	t.Setenv("GM_CF_TOKEN_FILE", "")
+	t.Setenv("GM_CF_TOKEN", "")
+	f.set(func(d *Data) {
+		d.Settings.Domain, d.Settings.UseCloudflare, d.Settings.UseCaddy, d.Settings.CaddyBase = "example.com", true, true, ""
+		d.Services = []*Service{
+			{ID: "m", Subdomain: "notes", Upstream: "app:1", Exposure: ExposurePublic, Proxied: true, MTLS: true, Enabled: true},
+			{ID: "o", Subdomain: "open", Upstream: "app:2", Exposure: ExposurePublic, Enabled: true},
+		}
+	})
+	fd := &fakeStackDocker{}
+	installFakeDocker(t, fd.handle)
+	boss.must(202, "POST", "/api/stacks/caddy/install", `{"httpsPort":"8444","tls":"internal"}`)
+	j := waitStackJob(t, boss, "caddy")
+	if j["state"] != "ok" {
+		t.Fatalf("install: %v", j)
+	}
+	cf, _ := os.ReadFile(filepath.Join(f.app.store.Snapshot().Stacks["caddy"].Dir, "conf", "Caddyfile"))
+	if strings.Contains(string(cf), "notes.example.com") || !strings.Contains(string(cf), "open.example.com") {
+		t.Fatalf("FRESH-24 first Caddyfile:\n%s", cf)
+	}
+	if !strings.Contains(fmt.Sprint(j["log"]), "보류") {
+		t.Fatal("FRESH-24 the install log must say what was held")
+	}
+}
+
+// FRESH-25: the reason a crashed container gives is pulled out of its log for the error message
+func TestFreshCrashReason(t *testing.T) {
+	caddy := `{"level":"info","msg":"using config from file"}
+{"level":"error","ts":1,"msg":"loading http app module","error":"provision http: reading /etc/caddy/certs/cf-origin-pull-ca.pem: no such file or directory"}`
+	if r := crashReason(caddy); !strings.Contains(r, "cf-origin-pull-ca.pem") || strings.HasPrefix(r, "{") {
+		t.Fatalf("FRESH-25 caddy: %q", r)
+	}
+	if r := crashReason("time=x level=fatal msg=\"Can't continue due to the errors loading the configuration\""); !strings.Contains(r, "Can't continue") {
+		t.Fatalf("FRESH-25 authelia: %q", r)
+	}
+	if r := crashReason("all good\nstarted"); r != "" {
+		t.Fatalf("FRESH-25 nothing to report: %q", r)
+	}
+}
