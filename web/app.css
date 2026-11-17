@@ -1265,3 +1265,26 @@ html:not([lang="ko"]) .brand-en { display: none; }
 .net-advice { margin-top: 6px; }
 .net-advice .callout .btn { margin-top: 6px; align-self: flex-start; }
 .ok-text { color: var(--t-ok); }
+/* dashboard: containers Gilmok installed */
+.stk-strip { margin: 0 0 16px; }
+.stk-strip[hidden] { display: none; }
+.stk-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.stk-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.stk-card { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-left-width: 3px; border-radius: var(--radius-sm); background: rgb(var(--panel) / .55); }
+.stk-card.ok { border-left-color: var(--ok); }
+.stk-card.warn { border-left-color: var(--warn); }
+.stk-card.danger { border-left-color: var(--danger); }
+.stk-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.stk-top .badge { margin-left: auto; }
+.stk-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.stk-dot.ok { background: var(--ok); }
+.stk-dot.warn { background: var(--warn); }
+.stk-dot.danger { background: var(--danger); animation: gm-blink 1.4s ease-in-out infinite; }
+@keyframes gm-blink { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .stk-dot.danger { animation: none; } }
+.stk-detail { margin: 0; min-height: 1.4em; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+/* topology: container state of a component, zoom, blind */
+.topo-svg .node.ctr-down .node-bg { stroke: var(--danger); stroke-opacity: .9; stroke-dasharray: 6 4; }
+.topo-svg .cdot.danger circle { animation: gm-blink 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .topo-svg .cdot.danger circle { animation: none; } }
+.topo-sum .seg-mini > button { min-width: 28px; }

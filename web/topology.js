@@ -300,7 +300,18 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
       sv('text', { x: x + w / 2, y: y + 12.6, 'text-anchor': 'middle', fill: color, 'font-size': 10.5, 'font-weight': 600 }, text));
     return w;
   }
-  function node(x, cy, w, hgt, { title, sub, iconName, color, list = [], dim, title2, extra, edit, unknown }) {
+  // container state of a component (Caddy / Authelia / CrowdSec): a dot at the top right of its box
+  const ctrStates = (info && info.ctrStates) || {};
+  const CTR_TXT = { running: ['실행 중', 'ok'], restarting: ['재시작 반복', 'danger'], exited: ['멈춤', 'danger'], created: ['멈춤', 'danger'], paused: ['일시 정지', 'warn'], '': ['컨테이너 없음', 'danger'] };
+  function ctrDot(g, w, key) {
+    if (!(key in ctrStates)) return;
+    const [txt, tone] = CTR_TXT[ctrStates[key]] || [ctrStates[key], 'warn'];
+    const c = tone === 'ok' ? TC.ok : tone === 'warn' ? TC.warn : TC.danger;
+    g.append(sv('g', { class: `cdot ${tone}` }, sv('title', null, `컨테이너: ${txt}`),
+      sv('circle', { cx: w - 14, cy: 14, r: 5.5, fill: c, stroke: TC.surface, 'stroke-width': 2 })));
+    if (tone !== 'ok') g.classList.add('ctr-down');
+  }
+  function node(x, cy, w, hgt, { title, sub, iconName, color, list = [], dim, title2, extra, edit, unknown, ctr }) {
     const yy = cy - hgt / 2;
     const g = sv('g', { class: `node ${dim ? 'dim' : ''} ${unknown ? 'unknown' : ''} ${edit ? 'editable' : ''} ${keys(list)}`, transform: `translate(${x} ${yy})` },
       title2 ? sv('title', null, title2) : null,
@@ -311,6 +322,7 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
       sv('text', { x: 52, y: sub ? Math.min(hgt / 2, 27) - 3 : hgt / 2 + 5, class: 'n-title' }, title),
       sub ? sv('text', { x: 52, y: Math.min(hgt / 2, 27) + 13, class: 'n-sub' }, sub) : null);
     if (extra) extra(g);
+    if (ctr) ctrDot(g, w, ctr);
     if (edit && onEdit) {
       g.setAttribute('tabindex', '0');
       g.setAttribute('role', 'button');
@@ -351,6 +363,7 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
       topoIcon('server', 27, 27, 20, TC.accent),
       sv('text', { x: 52, y: 24, class: 'n-title' }, 'Caddy'),
       sv('text', { x: 52, y: 40, class: 'n-sub' }, clip(set.caddyContainer || 'caddy', 18)));
+    ctrDot(g, CW, 'caddy');
     let xx = 12;
     if (wafN) xx += pill(g, xx, 50, `WAF ${wafN}`, TC.danger, true) + 4;
     if (authN) pill(g, xx, 50, `Authelia ${authN}`, TC.accent, true);
@@ -497,7 +510,7 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
   // ---- CrowdSec loop (logs → decisions → Cloudflare list)
   if (csOn) {
     const cx = X.router, cy = 54;
-    node(cx, cy, NW + 20, NH, { title: 'CrowdSec', sub: set.crowdsecSync ? '차단 → Cloudflare' : '분석만', iconName: 'radar', color: TC.danger, list: orangeItems, title2: 'mTLS 사이트 접근 로그(실제 IP)를 분석해 공격 IP를 판정' });
+    node(cx, cy, NW + 20, NH, { title: 'CrowdSec', sub: set.crowdsecSync ? '차단 → Cloudflare' : '분석만', iconName: 'radar', color: TC.danger, list: orangeItems, ctr: 'crowdsec', title2: 'mTLS 사이트 접근 로그(실제 IP)를 분석해 공격 IP를 판정' });
     edge(X.caddy + CW / 2, boxTop, cx + NW + 20, cy, TC.danger, orangeItems, { dashed: true, static: true, d: `M${X.caddy + CW / 2} ${boxTop} C${X.caddy + CW / 2} ${cy} ${X.caddy + CW / 2} ${cy} ${cx + NW + 22} ${cy}`, label: '접근 로그', labelDy: 0 });
     if (set.crowdsecSync && cfY != null && orangeItems.length) {
       const ty = Y(cfY) - NH / 2 - 10;
@@ -611,7 +624,7 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
     // manages Authelia (right)
     if (use('authelia')) {
       const ax = X.group + 64;
-      node(ax, gilY, GW, NH, { title: 'Authelia', sub: `로그인 관문 · ${authN}개 사이트`, iconName: 'shield', color: VIOLET,
+      node(ax, gilY, GW, NH, { title: 'Authelia', sub: `로그인 관문 · ${authN}개 사이트`, iconName: 'shield', color: VIOLET, ctr: 'authelia',
         title2: `Authelia (${set.autheliaContainer || ''}) — 길목이 access_control과 users_database.yml을 씁니다` });
       manage(`M${gilX + GLW} ${gilY} L${ax - 2} ${gilY}`, '정책·사용자', (gilX + GLW + ax) / 2, gilY - 16);
     }
@@ -706,8 +719,38 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
     wrap.append(h('span', { class: 'small muted' }, '묶기'), opt('expo', '공개 방식', '공개(Proxied·DNS only)·사설로 묶습니다'), netBtn);
     return wrap;
   })();
+  // zoom (fit = the box width) and blind (hide addresses for screenshots); both remembered per browser
+  const zoomOf = () => { try { return localStorage.getItem('gm.topoZoom') || 'fit'; } catch { return 'fit'; } };
+  const blindOn = () => { try { return localStorage.getItem('gm.topoBlind') === '1'; } catch { return false; } };
+  const store = (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } };
+  const ZOOMS = [0.6, 0.8, 1, 1.25, 1.5, 2];
+  const repaint = () => setMode(mode);
+  const zoomCtl = (() => {
+    const z = zoomOf();
+    const cur = z === 'fit' ? null : parseFloat(z);
+    const step = (dir) => {
+      const base = cur || 1;
+      const i = ZOOMS.findIndex((v) => v >= base - 0.001);
+      const next = ZOOMS[Math.min(ZOOMS.length - 1, Math.max(0, (i < 0 ? ZOOMS.length - 1 : i) + dir))];
+      store('gm.topoZoom', String(next));
+      repaint();
+    };
+    const minus = h('button', { type: 'button', title: '축소', 'aria-label': '축소' }, '−');
+    const plus = h('button', { type: 'button', title: '확대', 'aria-label': '확대' }, '+');
+    const fit = h('button', { type: 'button', class: z === 'fit' ? 'on' : '', title: '화면 폭에 맞춤', 'aria-pressed': String(z === 'fit') }, cur ? `${Math.round(cur * 100)}%` : '맞춤');
+    minus.addEventListener('click', () => step(-1));
+    plus.addEventListener('click', () => step(1));
+    fit.addEventListener('click', () => { store('gm.topoZoom', 'fit'); repaint(); });
+    return h('div', { class: 'seg-mini', role: 'group', 'aria-label': '확대·축소' }, minus, fit, plus);
+  })();
+  const blindBtn = (() => {
+    const on = blindOn();
+    const b = h('button', { type: 'button', class: on ? 'on' : '', 'aria-pressed': String(on), title: 'IP·도메인·대상 주소·호스트 이름을 가립니다 (스크린샷 공유용)' }, on ? '가림 켜짐' : '주요 정보 가리기');
+    b.addEventListener('click', () => { store('gm.topoBlind', on ? '0' : '1'); repaint(); });
+    return h('div', { class: 'seg-mini' }, b);
+  })();
   const sum = h('div', { class: 'topo-sum' },
-    modeSel,
+    modeSel, zoomCtl, blindBtn,
     h('span', { class: 'badge' }, `서비스 ${en.length}/${all.length}`),
     (() => { const hs = all.map(healthOf).filter(Boolean); const down = hs.filter((x) => x.st === 'down').length; return hs.length ? h('span', { class: `badge ${down ? 'danger' : 'ok'}` }, down ? `✗ 응답 없음 ${down}` : `● 모두 정상 ${hs.length}`) : null; })(),
     h('span', { class: 'badge public' }, `공개 ${en.filter((s) => s.exposure === 'public').length}`),
@@ -727,7 +770,50 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
       h('span', { class: 'small' }, '공유기·방화벽·터널, Tailscale 경로, 호스트 이름은 구성도에서 눌러 추가·수정·삭제합니다. 포트는 Caddy 컨테이너에서 자동으로 읽습니다.')));
   }
   if (M.warns.length) notes.push(callout('warn', h('b', null, `구성 확인 ${M.warns.length}건`), h('ul', null, M.warns.map((x) => h('li', null, x.text)))));
-  return h('div', { class: 'glass topo' }, sum, notes.length ? h('div', { class: 'stack topo-notes' }, notes) : null, h('div', { class: 'topo-scroll' }, svg), legend);
+  // zoom: an explicit width (the drawing keeps its proportions); "fit" leaves it to the CSS (box width)
+  const z = zoomOf();
+  if (z !== 'fit' && parseFloat(z) > 0) {
+    svg.style.width = `${Math.round(width * parseFloat(z))}px`;
+    svg.style.minWidth = '0';
+  }
+  const out = h('div', { class: `glass topo ${blindOn() ? 'blind' : ''}` }, sum, notes.length ? h('div', { class: 'stack topo-notes' }, notes) : null, h('div', { class: 'topo-scroll' }, svg), legend);
+  if (blindOn()) blindTopo(out, set, all);
+  return out;
+}
+
+/**
+ * Hide what identifies an installation (for screenshots): IP addresses, the domain (subdomains stay),
+ * upstream hosts (ports stay), the host name. Works on the drawn text and tooltips of the map and the
+ * notes around it; the data itself is untouched.
+ */
+function blindTopo(root, set, services) {
+  const dom = String(set.domain || '').toLowerCase();
+  const hostName = String(set.topoHostName || '');
+  const ups = new Set(services.map((s) => String(s.upstream || '').replace(/^https?:\/\//, '').split(':')[0]).filter((x) => x.length > 1));
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const reIP4 = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g;
+  const reIP6 = /\b(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{0,4}\b/gi;
+  const reDom = dom ? new RegExp(esc(dom), 'gi') : null;
+  const reUps = ups.size ? new RegExp(`\\b(${[...ups].map(esc).join('|')})(?=:|\\b)`, 'g') : null;
+  const reHost = hostName.length > 1 ? new RegExp(esc(hostName), 'g') : null;
+  const mask = (t) => {
+    let x = t.replace(reIP4, '•••.•••.•••.•••').replace(reIP6, '••••:••••');
+    if (reDom) x = x.replace(reDom, '•••');
+    if (reUps) x = x.replace(reUps, '•••');
+    if (reHost) x = x.replace(reHost, '•••');
+    return x;
+  };
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    const v = mask(n.nodeValue);
+    if (v !== n.nodeValue) n.nodeValue = v;
+  }
+  for (const el of root.querySelectorAll('[title], [aria-label]')) {
+    for (const a of ['title', 'aria-label']) {
+      const v = el.getAttribute(a);
+      if (v) el.setAttribute(a, mask(v));
+    }
+  }
 }
 
 // ======================================================================= panel + wizard

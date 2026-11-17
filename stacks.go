@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -604,6 +605,58 @@ type stackView struct {
 	State     string        `json:"state,omitempty"` // container state
 	Job       *StackJob     `json:"job,omitempty"`   // last job of this stack
 	DefaultCt string        `json:"defaultContainer"`
+	// for the dashboard: how the container is doing, and why it is not (from its own log)
+	Restarts  int       `json:"restarts,omitempty"`
+	StartedAt time.Time `json:"startedAt,omitempty"`
+	Health    string    `json:"health,omitempty"` // Docker HEALTHCHECK: healthy | unhealthy | starting
+	ExitCode  int       `json:"exitCode,omitempty"`
+	Reason    string    `json:"reason,omitempty"`
+}
+
+// stackDetail fills the dashboard fields of a managed container (one inspect; the log is read only
+// when the container is down, crash-looping or unhealthy).
+func stackDetail(ctx context.Context, v *stackView) {
+	if v.Record == nil || v.State == "" {
+		return
+	}
+	out, err := docker(ctx, nil, nil, "inspect", "-f", "{{.RestartCount}}|{{.State.StartedAt}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{.State.ExitCode}}", v.Record.Container)
+	if err != nil {
+		return
+	}
+	p := strings.SplitN(strings.TrimSpace(out), "|", 4)
+	if len(p) == 4 {
+		v.Restarts, _ = strconv.Atoi(p[0])
+		v.StartedAt, _ = time.Parse(time.RFC3339Nano, p[1])
+		v.Health = p[2]
+		v.ExitCode, _ = strconv.Atoi(p[3])
+	}
+	if v.State != "running" || v.Health == "unhealthy" {
+		if logs, err := docker(ctx, nil, nil, "logs", "--tail", "40", v.Record.Container); err == nil {
+			v.Reason = crashReason(logs)
+		}
+	}
+}
+
+// GET /api/stacks/{name}/logs — the last lines of a managed container's log (「연결·시스템」 or 「로그」)
+func (a *App) getStackLogs(w http.ResponseWriter, r *http.Request) {
+	if !a.auth.can(r, "system") && !a.auth.can(r, "logs") {
+		fail(w, 403, errors.New("「연결·시스템」 또는 「로그」 권한이 필요합니다"))
+		return
+	}
+	name := r.PathValue("name")
+	rec := a.store.Snapshot().Stacks[name]
+	if stackKinds[name] == nil || rec == nil {
+		fail(w, 404, errors.New("길목이 설치한 구성요소가 아닙니다"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	out, err := docker(ctx, nil, nil, "logs", "--tail", "300", "--timestamps", rec.Container)
+	if err != nil && strings.TrimSpace(out) == "" {
+		fail(w, 502, fmt.Errorf("로그를 읽지 못했습니다: %v", err))
+		return
+	}
+	writeJSON(w, 200, map[string]any{"container": rec.Container, "log": out})
 }
 
 func (a *App) getStacks(w http.ResponseWriter, r *http.Request) {
@@ -615,6 +668,7 @@ func (a *App) getStacks(w http.ResponseWriter, r *http.Request) {
 		v := stackView{Kind: name, Label: k.Label, Record: d.Stacks[name], DefaultCt: k.DefaultName}
 		if v.Record != nil {
 			v.State, _ = ctrStateOf(ctx, v.Record.Container)
+			stackDetail(ctx, &v)
 		}
 		a.stk.mu.Lock()
 		j := a.stk.last[name]

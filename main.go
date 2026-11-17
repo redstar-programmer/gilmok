@@ -27,7 +27,7 @@ import (
 //go:embed web
 var webFS embed.FS
 
-var version = "0.1.7"
+var version = "0.1.8"
 
 func main() {
 	dataDir := env("GM_DATA", "/data")
@@ -136,6 +136,7 @@ func (app *App) handler() http.Handler {
 	api.HandleFunc("POST /api/stacks/{name}/compose-reset", S(app.postStackComposeReset))
 	api.HandleFunc("GET /api/docker/networks", app.getDockerNetworks)
 	api.HandleFunc("POST /api/stacks/caddy/ca", S(app.postCaddyCA))
+	api.HandleFunc("GET /api/stacks/{name}/logs", app.getStackLogs)
 	api.HandleFunc("POST /api/stacks/caddy/mtls", S(app.postCaddyMTLS))
 	api.HandleFunc("POST /api/stacks/{name}/{action}", S(app.postStackAction))
 	api.HandleFunc("POST /api/crowdsec/bouncer", S(app.postCSBouncer))

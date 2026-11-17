@@ -32,6 +32,7 @@ type TopoInfo struct {
 	SelfName      string                `json:"selfName"`  // Gilmok's own container
 	SelfPorts     []TopoPort            `json:"selfPorts"` // its published ports (direct admin access)
 	SvcNets       map[string]TopoSvcNet `json:"svcNets"`   // service id → Docker network of its upstream
+	CtrStates     map[string]string     `json:"ctrStates"` // caddy / authelia / crowdsec → container state ("" = no container)
 }
 
 type topoCache struct {
@@ -131,6 +132,17 @@ func (a *App) getTopology(w http.ResponseWriter, r *http.Request) {
 	info.SvcNets = map[string]TopoSvcNet{}
 	if caddyMode(st) == "docker" {
 		info.SvcNets = serviceNetworks(ctx, st, d.Services)
+	}
+	// container state of each component in use, for the status dots on the map
+	info.CtrStates = map[string]string{}
+	for _, c := range []struct {
+		key, ctr string
+		on       bool
+	}{{"caddy", st.CaddyContainer, st.UseCaddy && caddyMode(st) == "docker"}, {"authelia", st.AutheliaCtr, st.UseAuthelia}, {"crowdsec", st.CrowdSecContainer, st.UseCrowdSec}} {
+		if c.on && c.ctr != "" {
+			s, _ := ctrStateOf(ctx, c.ctr)
+			info.CtrStates[c.key] = s
+		}
 	}
 	writeJSON(w, 200, info)
 }

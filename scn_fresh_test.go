@@ -380,3 +380,61 @@ func TestFreshCrashReason(t *testing.T) {
 		t.Fatalf("FRESH-25 nothing to report: %q", r)
 	}
 }
+
+// FRESH-26: the dashboard strip — state details of managed containers, the crash reason, the log API
+func TestFreshStackStatusForDashboard(t *testing.T) {
+	f := newFullApp(t)
+	c := f.admin(t)
+	viewer := f.user(t, c, "viewer7", "viewer")
+	f.set(func(d *Data) {
+		d.Stacks = map[string]*ManagedStack{
+			"caddy":    {Name: "caddy", Container: "my-caddy", Dir: f.dir},
+			"authelia": {Name: "authelia", Container: "my-auth", Dir: f.dir},
+			"crowdsec": {Name: "crowdsec", Container: "my-cs", Dir: f.dir},
+		}
+	})
+	installFakeDocker(t, func(args []string, _ []byte) (string, error) {
+		j := strings.Join(args, " ")
+		ctr := args[len(args)-1]
+		switch {
+		case strings.Contains(j, "State.Status"):
+			switch ctr {
+			case "my-caddy":
+				return "running|caddy", nil
+			case "my-auth":
+				return "restarting|authelia", nil
+			}
+			return "", fmt.Errorf("no such container")
+		case strings.Contains(j, "RestartCount"):
+			if ctr == "my-auth" {
+				return "7|2026-11-17T01:00:00.5Z||1", nil
+			}
+			return "0|2026-11-17T00:00:00Z|healthy|0", nil
+		case args[0] == "logs":
+			return "time=x level=info msg=start\ntime=y level=fatal msg=\"Can't continue due to the errors loading the configuration\"", nil
+		}
+		return "", nil
+	})
+	m := c.must(200, "GET", "/api/stacks", "")
+	st := m["stacks"].(map[string]any)
+	cad, au, cs := st["caddy"].(map[string]any), st["authelia"].(map[string]any), st["crowdsec"].(map[string]any)
+	if cad["state"] != "running" || cad["health"] != "healthy" || cad["reason"] != nil {
+		t.Fatalf("FRESH-26 running: %v", cad)
+	}
+	if au["state"] != "restarting" || au["restarts"] != float64(7) || !strings.Contains(fmt.Sprint(au["reason"]), "Can't continue") {
+		t.Fatalf("FRESH-26 crash loop: %v", au)
+	}
+	if cs["state"] != nil && cs["state"] != "" {
+		t.Fatalf("FRESH-26 missing container: %v", cs)
+	}
+	lg := c.must(200, "GET", "/api/stacks/authelia/logs", "")
+	if !strings.Contains(fmt.Sprint(lg["log"]), "level=fatal") {
+		t.Fatalf("FRESH-26 logs: %v", lg)
+	}
+	if code, _ := viewer.do("GET", "/api/stacks/authelia/logs", ""); code != 403 {
+		t.Fatalf("FRESH-26 viewer logs: %d", code)
+	}
+	if code, _ := c.do("GET", "/api/stacks/nginx/logs", ""); code != 404 {
+		t.Fatalf("FRESH-26 unknown stack: %d", code)
+	}
+}

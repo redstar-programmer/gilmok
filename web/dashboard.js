@@ -683,7 +683,7 @@ function renderDashboard(panel) {
   if (DASH.edit) banner = h('div', { class: 'stack' }, banner, callout('', '편집 중 — 카드를 끌어서 순서를 바꾸거나 ◀ ▶ 로 옮기고, ✎ 로 지표·크기를 바꿉니다.'));
   dashGrid = h('div', { class: 'dash-grid' });
   dashEmpty = h('div');
-  append(panel, [dashHead, banner, dashEmpty, dashGrid]);
+  append(panel, [dashHead, typeof stacksStrip === 'function' ? stacksStrip() : null, banner, dashEmpty, dashGrid]);
   paintStream();
   const go = async () => {
     if (!DASH.widgets) {

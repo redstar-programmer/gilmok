@@ -526,3 +526,119 @@ async function openComposeEditor(name, label, onDone) {
     });
   });
 }
+
+
+// ======================================================================= dashboard strip
+
+const STACK_TAB = { caddy: 'caddy', authelia: 'authelia', crowdsec: 'crowdsec' };
+
+// uptime as 2d 3h / 5h 12m / 42m / 30s — language-neutral, so the sentence around it translates
+function uptimeText(t) {
+  const s = Math.floor(Math.max(0, (Date.now() - Date.parse(t)) / 1000));
+  if (!t || Number.isNaN(s)) return '';
+  const d = Math.floor(s / 86400), hh = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  if (d) return `${d}d ${hh}h`;
+  if (hh) return `${hh}h ${m}m`;
+  if (m) return `${m}m`;
+  return `${s}s`;
+}
+
+/** watch one stack job in a dialog until it ends (dashboard actions) */
+function openStackJob(name, title, onEnd) {
+  const close = h('button', { type: 'button', class: 'btn' }, '닫기');
+  const log = stackJobLog(name, (j) => { close.className = 'btn primary'; if (onEnd) onEnd(j); });
+  const d = openDialog({ title, size: 'wide', body: log, footer: [close] });
+  close.addEventListener('click', () => d.close());
+  log.start();
+}
+
+function openStackLogs(name, label) {
+  const pre = h('pre', { class: 'log-view stack-log', style: { maxHeight: '60vh' }, translate: 'no' }, '불러오는 중…');
+  const close = h('button', { type: 'button', class: 'btn' }, '닫기');
+  const again = h('button', { type: 'button', class: 'btn ghost' }, icon('refresh'), '다시 읽기');
+  const d = openDialog({ title: `${label} 로그 (마지막 300줄)`, size: 'wide', body: pre, footer: [again, h('span', { class: 'grow' }), close] });
+  const load = () => busy(again, async () => {
+    try {
+      const r = await api('GET', `/api/stacks/${name}/logs`);
+      pre.textContent = r.log || '(로그 없음)';
+      pre.scrollTop = pre.scrollHeight;
+    } catch (ex) { pre.textContent = ex.message; }
+  });
+  again.addEventListener('click', load);
+  close.addEventListener('click', () => d.close());
+  load();
+}
+
+/**
+ * The containers Gilmok installed, at the top of the dashboard: state, why it is down, and the one
+ * button that brings it back (start / restart / reinstall). Refreshes itself while shown.
+ */
+function stacksStrip() {
+  const box = h('section', { class: 'stk-strip', 'aria-label': '길목이 설치한 구성요소' });
+  let timer = 0;
+  const canSys = typeof can !== 'function' || can('system');
+  const draw = async () => {
+    clearTimeout(timer);
+    if (box.dataset.shown && !box.isConnected) return;
+    let r;
+    try { r = await loadStacks(); } catch { timer = setTimeout(draw, 15000); return; }
+    const list = Object.entries(r.stacks || {}).filter(([, v]) => v.record || (v.job && v.job.state === 'running'));
+    if (!list.length) { box.replaceChildren(); box.hidden = true; return; }
+    box.hidden = false;
+    box.dataset.shown = '1';
+    const busyAny = !!r.running;
+    const act = (name, v, action, label, cls, confirmMsg) => {
+      const b = h('button', { type: 'button', class: `btn sm ${cls || ''}`, disabled: !canSys || busyAny, title: canSys ? (busyAny ? '다른 작업이 끝난 뒤에 할 수 있습니다' : '') : '「연결·시스템」 권한이 필요합니다' }, label);
+      b.addEventListener('click', async () => {
+        if (confirmMsg && !(await confirmDialog({ title: `${v.label} ${label}`, message: confirmMsg, okText: label }))) return;
+        try {
+          await busy(b, () => api('POST', `/api/stacks/${name}/${action}`, {}));
+          openStackJob(name, `${v.label} ${label}`, async () => { await refreshState(); draw(); });
+          draw();
+        } catch (ex) { toast(ex.message, 'err', 9000); }
+      });
+      return b;
+    };
+    const cards = list.sort(([a], [b]) => ['caddy', 'authelia', 'crowdsec'].indexOf(a) - ['caddy', 'authelia', 'crowdsec'].indexOf(b)).map(([name, v]) => {
+      const rec = v.record || {};
+      const jobRun = v.job && v.job.state === 'running';
+      let tone; let state; let detail; const buttons = [];
+      if (jobRun) {
+        tone = 'warn'; state = `${stackActionLabel(v.job.action)} 진행 중…`; detail = '끝나면 자동으로 바뀝니다';
+        const watch = h('button', { type: 'button', class: 'btn sm' }, '진행 보기');
+        watch.addEventListener('click', () => openStackJob(name, `${v.label} ${stackActionLabel(v.job.action)}`, () => draw()));
+        buttons.push(watch);
+      } else if (!v.state) {
+        tone = 'danger'; state = '컨테이너 없음';
+        detail = '누군가 지웠거나 Docker가 정리했습니다. 남아 있는 설정·데이터로 다시 만들 수 있습니다.';
+        buttons.push(act(name, v, 'install', '다시 설치', 'primary', `${rec.container} 컨테이너를 길목 폴더에 남아 있는 설정·데이터로 다시 만듭니다.`));
+      } else if (v.state === 'restarting' || (v.state === 'running' && v.health === 'unhealthy')) {
+        tone = 'danger'; state = v.state === 'restarting' ? `재시작 반복 (${v.restarts || 0}회)` : '응답 이상 (unhealthy)';
+        detail = v.reason ? `원인: ${v.reason}` : '로그에서 원인을 확인하세요.';
+        buttons.push(act(name, v, 'restart', '다시 시작', 'primary'),
+          act(name, v, 'install', '다시 설치', '', '설정 파일을 길목 기준으로 다시 만들고 컨테이너를 새로 만듭니다. 데이터(인증서·DB)는 유지됩니다.'));
+      } else if (v.state !== 'running') {
+        tone = 'warn'; state = v.exitCode ? `멈춤 (종료 코드 ${v.exitCode})` : '멈춤';
+        detail = v.reason ? `마지막 오류: ${v.reason}` : '이 구성요소를 쓰는 사이트가 동작하지 않습니다.';
+        buttons.push(act(name, v, 'start', '시작', 'primary'));
+      } else {
+        tone = 'ok'; state = '실행 중';
+        detail = [v.startedAt ? `실행 시간 ${uptimeText(v.startedAt)}` : '', v.health === 'healthy' ? '정상(healthy)' : '', v.restarts ? `재시작 ${v.restarts}회` : ''].filter(Boolean).join(' · ');
+        buttons.push(act(name, v, 'restart', '재시작', '', '컨테이너를 다시 시작합니다. 잠깐 사이트가 끊깁니다.'));
+      }
+      const logs = h('button', { type: 'button', class: 'btn sm ghost', disabled: !rec.container }, '로그');
+      logs.addEventListener('click', () => openStackLogs(name, v.label));
+      const more = h('button', { type: 'button', class: 'btn sm ghost' }, '관리 ›');
+      more.addEventListener('click', () => { location.hash = '#' + (STACK_TAB[name] || 'gilmok'); });
+      return h('div', { class: `stk-card ${tone}` },
+        h('div', { class: 'stk-top' }, h('span', { class: `stk-dot ${tone}`, 'aria-hidden': 'true' }), h('b', null, v.label), h('span', { class: 'mono small muted' }, rec.container || ''),
+          h('span', { class: `badge ${tone === 'ok' ? 'ok' : tone === 'warn' ? 'warn' : 'danger'}` }, state)),
+        h('p', { class: `stk-detail small ${tone === 'danger' ? 'danger-text' : 'muted'}`, title: detail }, detail || ' '),
+        h('div', { class: 'row tight' }, ...buttons, logs, more));
+    });
+    box.replaceChildren(h('div', { class: 'stk-head' }, h('b', null, '길목이 설치한 구성요소'), h('span', { class: 'small muted' }, '내려가면 여기서 바로 시작·재시작·다시 설치할 수 있습니다')), h('div', { class: 'stk-cards' }, cards));
+    timer = setTimeout(draw, busyAny ? 3000 : 10000);
+  };
+  draw();
+  return box;
+}
