@@ -389,16 +389,19 @@ const RENDER = {
   health(body, w, d) {
     const list = d.services || [];
     if (!list.length) { fill(body, h('p', { class: 'muted' }, '확인 중… (30초마다)')); return; }
-    const down = list.filter((s) => !s.ok).length;
+    // three states only: 서비스 중 (blue) · 느림 (500 ms or more, yellow) · 응답 없음 (red)
+    const stOf = (s) => (!s.ok ? 'down' : s.ms >= 500 ? 'slow' : 'up');
+    const look = { up: [C.s1, '서비스 중'], slow: [C.warn, '느림'], down: [C.crit, '응답 없음'] };
+    const n = { up: 0, slow: 0, down: 0 };
+    for (const s of list) n[stOf(s)]++;
     const cd = d.caddy && d.caddy.down;
     fill(body,
-      h('p', { class: 'small muted' }, '막대 하나 = 길목이 대상에 연결해 본 한 번 (왼쪽이 오래된 것, 1분마다 · 대시보드를 보는 동안 30초마다) — 초록 정상 · 노랑 500ms 넘음 · 빨강 응답 없음'),
-      h('div', { class: 'row' }, cd ? statusPill('crit', `Caddy 중단 (${caddyStateText(d.caddy)}) — 모든 사이트 접속 불가`) : down ? statusPill('crit', `${down}개 응답 없음`) : statusPill('good', `${list.length}개 모두 정상`)),
-      cd ? h('p', { class: 'small muted' }, '아래는 길목이 대상(upstream)에 직접 연결해 본 결과입니다. Caddy를 다시 시작해야 사이트에 접속됩니다.') : null,
+      cd ? h('div', { class: 'row' }, statusPill('crit', `Caddy 중단 (${caddyStateText(d.caddy)}) — 모든 사이트 접속 불가`)) : null,
+      h('div', { class: 'dlegend hsum' }, ['up', 'slow', 'down'].filter((k) => n[k] || k === 'up').map((k) => h('span', null, h('i', { style: { background: look[k][0], borderRadius: '50%' } }), look[k][1], h('b', null, String(n[k]))))),
       h('div', { class: 'hgrid' }, list.map((s) => {
-        const tile = h('button', { type: 'button', class: `htile ${s.ok ? 'ok' : 'down'}`, title: `${s.fqdn}\n→ ${s.upstream}${s.err ? `\n${s.err}` : ''}` },
-          h('div', { class: 'ht-top' }, h('span', { class: 'sdot', style: { background: s.ok ? C.good : C.crit } }), h('b', null, s.sub), h('span', { class: 'ht-ms' }, s.ok ? fmtMs(s.ms) : '응답 없음')),
-          h('div', { class: 'ht-hist', 'aria-hidden': 'true' }, (s.history || []).map((p) => h('i', { title: `${hhmmss(p.t)} · ${p.ok ? fmtMs(p.ms) : '응답 없음'}`, style: { background: p.ok ? (p.ms > 500 ? C.warn : C.good) : C.crit, opacity: p.ok ? 0.75 : 1 } }))));
+        const k = stOf(s);
+        const tile = h('button', { type: 'button', class: `htile ${k}`, title: `${s.fqdn}\n→ ${s.upstream}${s.err ? `\n${s.err}` : ''}` },
+          h('div', { class: 'ht-top' }, h('span', { class: 'sdot', style: { background: look[k][0] } }), h('b', null, s.sub), h('span', { class: 'ht-ms' }, s.ok ? fmtMs(s.ms) : '응답 없음')));
         tile.addEventListener('click', () => { const svc = S.state.services.find((x) => x.id === s.id); if (svc) openServiceDrawer(svc); });
         return tile;
       })));

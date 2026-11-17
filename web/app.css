@@ -725,8 +725,9 @@ select.auto-w { width: auto; }
 .ht-top { display: flex; align-items: center; gap: 4px; font-size: 12.5px; }
 .ht-top b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ht-ms { color: var(--fg-2); font-size: 11.5px; font-variant-numeric: tabular-nums; }
-.ht-hist { display: flex; gap: 1px; height: 8px; margin-top: 5px; }
-.ht-hist i { flex: 1; border-radius: 1px; max-width: 6px; }
+.htile.slow { border-color: rgb(var(--ink) / .12); }
+.ht-top .sdot { flex: none; }
+.hsum { margin-bottom: 2px; }
 
 .ctr-list { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; min-height: 0; }
 .ctr-row { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
@@ -1295,9 +1296,12 @@ html:not([lang="ko"]) .brand-en { display: none; }
 /* scatter: the dot under the mouse */
 .sc-ring { position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px; border: 2px solid; border-radius: 50%; pointer-events: none; box-shadow: 0 0 0 2px rgb(var(--shade) / .35); }
 /* dashboard: status legend = filter */
-.st-filter button { display: inline-flex; align-items: center; gap: 5px; padding: 1px 6px; margin: -1px -6px; border: 0; border-radius: 6px; background: none; color: inherit; font: inherit; cursor: pointer; }
-.st-filter button:hover { background: rgb(var(--ink) / .06); }
+.st-filter { gap: 6px; align-items: center; }
+.st-filter button { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 8px; border: 1px solid rgb(var(--ink) / .16); border-radius: 999px; background: rgb(var(--ink) / .06); color: var(--fg); font: inherit; font-size: 12px; cursor: pointer; line-height: 1.3; }
+.st-filter button:hover { background: rgb(var(--ink) / .1); }
 .st-filter button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.st-filter button.off { opacity: .45; text-decoration: line-through; }
+.st-filter button i { width: 9px; height: 9px; border-radius: 50%; }
+.st-filter button.off { background: transparent; border-style: dashed; color: var(--muted); }
+.st-filter button.off b { color: var(--muted); }
 .st-filter button.off i { background: transparent !important; box-shadow: inset 0 0 0 1.5px var(--muted); }
 .dtip.readout { max-width: 270px; }
