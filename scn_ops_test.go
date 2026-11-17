@@ -191,6 +191,26 @@ func TestScnDashboard(t *testing.T) {
 	if m["data"].(map[string]any)["s"] == nil || m["data"].(map[string]any)["w"] == nil {
 		t.Fatalf("DASH-07: %v", m)
 	}
+	// DASH-09: a dashboard-wide live range overrides each widget's own (1 m sees only the last minute)
+	b, _ = json.Marshal(map[string]any{"range": "1m", "widgets": []Widget{{ID: "s", Type: "stat", Metric: "requests", Range: "24h"}, {ID: "c", Type: "scatter", Range: "15m"}}})
+	m = boss.must(200, "POST", "/api/dash/data", string(b))
+	d9 := m["data"].(map[string]any)
+	if n := d9["s"].(map[string]any)["value"].(float64); n < 1 || n > 50 {
+		t.Fatalf("DASH-09 value: %v", n)
+	}
+	if c := d9["c"].(map[string]any); int64(c["to"].(float64)-c["from"].(float64)) > 61_000 {
+		t.Fatalf("DASH-09 scatter window: %v", c)
+	}
+	boss.must(400, "POST", "/api/dash/data", `{"range":"7d","widgets":[]}`)
+	// DASH-10: a past From~To window — at most a day, start before end
+	b, _ = json.Marshal(map[string]any{"from": now - 2*3600_000, "to": now - 3600_000, "widgets": []Widget{{ID: "c", Type: "scatter", Range: "15m"}, {ID: "h", Type: "health"}}})
+	m = boss.must(200, "POST", "/api/dash/data", string(b))
+	d10 := m["data"].(map[string]any)
+	if c := d10["c"].(map[string]any); c["to"].(float64)-c["from"].(float64) != 3600_000 || d10["h"].(map[string]any)["liveOnly"] != true {
+		t.Fatalf("DASH-10: %v", d10)
+	}
+	boss.must(400, "POST", "/api/dash/data", fmt.Sprintf(`{"from":%d,"to":%d,"widgets":[]}`, now-25*3600_000, now))
+	boss.must(400, "POST", "/api/dash/data", fmt.Sprintf(`{"from":%d,"to":%d,"widgets":[]}`, now, now-1000))
 	// DASH-08: odd ranges never overflow
 	for _, q := range []string{"", "?from=abc&to=xyz", "?from=9223372036854775807&to=-9223372036854775808", "?min=-1&max=1e309"} {
 		if code, _ := boss.do("GET", "/api/dash/requests"+q, ""); code != 200 {

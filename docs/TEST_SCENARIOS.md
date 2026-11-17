@@ -519,6 +519,8 @@ SecRuleEngine Off`·`942100 "x"`·`abc`, 메모에 개행·백틱·201자 | ID�
 | DASH-06 | p95 | 히스토그램 | 버킷 안 선형 보간 | P2 | ✅ `TestScnDashboard` |
 | DASH-07 | 과거·장기 범위 | `at`, 7d/30d | DB에서 조회 | P2 | ✅ `TestScnDashboard` |
 | DASH-08 | 요청 목록 범위 | `from`·`to` 없음/잘못/아주 큼 | 기본 범위, 넘침 없음 | P1 | ✅ `TestScnDashboard` |
+| DASH-09 | 실시간 전체 기간 | `range` 1m~3h, 모르는 값 | 모든 위젯이 그 기간(위젯 자체 기간 무시), 모르는 값 400 | P1 | ✅ `TestScnDashboard` |
+| DASH-10 | 과거 From~To | 1시간 창 / 25시간 / 끝이 시작보다 앞 | 창 그대로 DB에서, 실시간 전용 위젯은 liveOnly, 1일 초과·역순 400 | P1 | ✅ `TestScnDashboard` |
 
 ## LOG — 로그 DB·디스크·감사 (`logdb.go`, `audit.go`, `logs_api.go`)
 
@@ -775,6 +777,7 @@ go test -count=1 -run 'Groups|Bulk' ./...   # 일부
 | FRESH-24 | 설치 때 첫 Caddyfile도 보류 | mTLS 사이트가 있는데 CA 없음 → 관리형 Caddy 설치 | mTLS 사이트만 빼고 씀, 설치 성공(운영 첫 설치에서 컨테이너가 재시작 반복) | P1 | ✅ `TestFreshInstallHoldsMTLS` + 실제 Docker 재현 4/4 |
 | FRESH-25 | 설치 실패 원인 | 컨테이너가 바로 멈춤 | 정리 전에 로그 30줄을 작업 로그에, 원인 줄(error/fatal)을 오류 메시지에 | P1 | ✅ `TestFreshCrashReason` |
 | FRESH-26 | 대시보드 구성요소 상태 | 관리형 컨테이너 실행 중 / 멈춤 / 재시작 반복 / 없음 | 상태·재시작 횟수·원인 줄, 로그 API | P1 | ✅ `TestFreshStackStatusForDashboard` · 실제 Docker: 멈춤→시작, 삭제→다시 설치(같은 이름·네트워크), 깨진 Caddyfile 재시작 반복(원인 표시)→다시 설치, 화면 「시작」 버튼 (2026-11-17) |
+| FRESH-27 | Caddy 중단 시 서비스 상태 | Caddy 컨테이너 멈춤·없음 / 실행 중 / Caddy 미사용 | `/api/health`의 `caddy.down` → 목록·구성도·대시보드에 「Caddy 중단」(대상 응답은 툴팁) | P1 | ✅ `TestFreshHealthKnowsCaddyDown` · 화면 확인 (2026-11-17) |
 | E2E-01~22 | 실제 처음 설치 | 실제 Docker: 언어 → 관리자 → Caddy(네트워크 지정·내부 인증서) → Authelia(네트워크 비움) → CrowdSec → 서비스 → 점검 → 적용 → 실제 접속 → CrowdSec 재시작 → 보류 | 전부 통과 | P1 | ✅ 24/24 (2026-11-11, 실제 Docker) |
 | E2E-P2-01~14 | 예전 Caddyfile → 관리형 스택 | PC 파일 가져오기 → CA 없이 적용(mTLS 보류) → 잘못된 PEM → CA 넣고 적용 → 클라이언트 인증서 없는 접속 거부 → 점검 | 전부 통과 | P1 | ✅ 14/14 (2026-11-11, 실제 Docker) |
 

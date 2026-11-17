@@ -1288,3 +1288,7 @@ html:not([lang="ko"]) .brand-en { display: none; }
 .topo-svg .cdot.danger circle { animation: gm-blink 1.4s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .topo-svg .cdot.danger circle { animation: none; } }
 .topo-sum .seg-mini > button { min-width: 28px; }
+/* top bar: version next to the name; dashboard past window */
+.brand-ver { font-size: .7em; font-weight: 500; color: var(--muted); font-variant-numeric: tabular-nums; padding: 1px 6px; border: 1px solid rgb(var(--ink) / .12); border-radius: 999px; }
+.brand-ver:empty { display: none; }
+.dash-window { flex-wrap: wrap; align-items: center; }

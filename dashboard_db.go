@@ -49,7 +49,7 @@ func (a *App) dbTotal(ctx context.Context, rng time.Duration, end time.Time, hos
 }
 
 func (a *App) dbStat(ctx context.Context, wd Widget, end time.Time) map[string]any {
-	rng := ranges[wd.Range]
+	rng := wd.dur()
 	_, ts, bs := a.dbSeries(ctx, rng, end, wd.Host, 30)
 	tot := a.dbTotal(ctx, rng, end, wd.Host)
 	out := map[string]any{"history": true}
@@ -112,7 +112,7 @@ func (a *App) dbStat(ctx context.Context, wd Widget, end time.Time) map[string]a
 }
 
 func (a *App) dbSeriesData(ctx context.Context, wd Widget, end time.Time) seriesOut {
-	step, ts, bs := a.dbSeries(ctx, ranges[wd.Range], end, wd.Host, 60)
+	step, ts, bs := a.dbSeries(ctx, wd.dur(), end, wd.Host, 60)
 	return buildSeries(wd.Metric, step, ts, bs)
 }
 
@@ -150,7 +150,7 @@ func buildSeries(metric string, step int64, ts []int64, bs []Bucket) seriesOut {
 }
 
 func (a *App) dbScatter(ctx context.Context, wd Widget, end time.Time) map[string]any {
-	from := end.Add(-ranges[wd.Range]).UnixMilli()
+	from := end.Add(-wd.dur()).UnixMilli()
 	rows, _ := a.ldb.QueryRequests(ctx, ReqQuery{From: from, To: end.UnixMilli(), Host: wd.Host, Limit: 6000})
 	pts := make([][4]float64, 0, len(rows))
 	for i := len(rows) - 1; i >= 0; i-- {
@@ -200,7 +200,7 @@ func (l *LogDB) TopRequests(ctx context.Context, dim string, from, to int64, hos
 }
 
 func (a *App) dbTop(ctx context.Context, wd Widget, end time.Time) map[string]any {
-	from := end.Add(-ranges[wd.Range]).UnixMilli()
+	from := end.Add(-wd.dur()).UnixMilli()
 	if wd.Dim == "slow" {
 		rows, _ := a.ldb.QueryRequests(ctx, ReqQuery{From: from, To: end.UnixMilli(), Host: wd.Host, Limit: wd.Limit, SlowFirst: true})
 		list := make([]ReqRec, 0, len(rows))

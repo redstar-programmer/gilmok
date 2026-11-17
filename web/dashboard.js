@@ -3,7 +3,18 @@
 // categorical slots + reserved status colors (always paired with a text label).
 'use strict';
 
-const DASH = { widgets: null, data: null, stream: null, edit: false, gen: 0, cards: new Map(), lastSize: new Map(), at: 0 };
+const DASH = { widgets: null, data: null, stream: null, edit: false, gen: 0, cards: new Map(), lastSize: new Map(), at: 0, from: 0, span: dashSpanSaved() };
+
+/** whole-dashboard range of the live view ("" = each widget's own); the past view is a From~To window of at most a day */
+const DASH_SPANS = [['', '위젯 설정대로'], ['1m', '최근 1분'], ['5m', '최근 5분'], ['10m', '최근 10분'], ['30m', '최근 30분'], ['1h', '최근 1시간'], ['2h', '최근 2시간'], ['3h', '최근 3시간']];
+const DASH_MAX_WINDOW = 24 * 3600e3;
+function dashSpanSaved() {
+  try { const v = localStorage.getItem('gm.dashSpan') || ''; return ['1m', '5m', '10m', '30m', '1h', '2h', '3h'].includes(v) ? v : ''; } catch { return ''; }
+}
+function fmtWindow(from, to) {
+  const o = { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false };
+  return `${new Date(from).toLocaleString(gmLocale(), o)} ~ ${new Date(to).toLocaleString(gmLocale(), o)}`;
+}
 
 const C = {
   s1: '#3987e5', s2: '#d95926', s3: '#199e70', s4: '#c98500',
@@ -194,7 +205,8 @@ const RENDER = {
     const unit = d.unit || '';
     const v = d.value;
     let state = null;
-    if (w.metric === 'healthUp' && d.down > 0) state = statusPill('crit', `${d.down}개 응답 없음`);
+    if (w.metric === 'healthUp' && d.caddyDown) state = statusPill('crit', 'Caddy 중단 — 접속 불가');
+    else if (w.metric === 'healthUp' && d.down > 0) state = statusPill('crit', `${d.down}개 응답 없음`);
     else if (w.metric === 'certDays' && v >= 0 && v < (w.warn || 14)) state = statusPill(v < 7 ? 'crit' : 'warn', `${v}일 남음`);
     else if (w.warn && !LOWER_IS_BAD.has(w.metric) && v >= w.warn) state = statusPill('warn', `기준 ${fmtValue(w.metric, w.warn)}${unit === '%' ? '%' : ''} 초과`);
     const shown = w.metric === 'certDays' && v < 0 ? '—' : unit === 'ms' || unit === 'bytes' ? fmtValue(w.metric, v) : fmtNum(v);
@@ -323,8 +335,10 @@ const RENDER = {
     const list = d.services || [];
     if (!list.length) { fill(body, h('p', { class: 'muted' }, '확인 중… (30초마다)')); return; }
     const down = list.filter((s) => !s.ok).length;
-    fill(body, 
-      h('div', { class: 'row' }, down ? statusPill('crit', `${down}개 응답 없음`) : statusPill('good', `${list.length}개 모두 정상`)),
+    const cd = d.caddy && d.caddy.down;
+    fill(body,
+      h('div', { class: 'row' }, cd ? statusPill('crit', `Caddy 중단 (${caddyStateText(d.caddy)}) — 모든 사이트 접속 불가`) : down ? statusPill('crit', `${down}개 응답 없음`) : statusPill('good', `${list.length}개 모두 정상`)),
+      cd ? h('p', { class: 'small muted' }, '아래는 길목이 대상(upstream)에 직접 연결해 본 결과입니다. Caddy를 다시 시작해야 사이트에 접속됩니다.') : null,
       h('div', { class: 'hgrid' }, list.map((s) => {
         const tile = h('button', { type: 'button', class: `htile ${s.ok ? 'ok' : 'down'}`, title: `${s.fqdn}\n→ ${s.upstream}${s.err ? `\n${s.err}` : ''}` },
           h('div', { class: 'ht-top' }, h('span', { class: 'sdot', style: { background: s.ok ? C.good : C.crit } }), h('b', null, s.sub), h('span', { class: 'ht-ms' }, s.ok ? fmtMs(s.ms) : '응답 없음')),
@@ -516,7 +530,9 @@ let dashEmpty = null; // one notice instead of twelve empty cards while no reque
 
 function widgetMeta(w) {
   const bits = [];
-  if (['stat', 'series', 'scatter', 'top'].includes(w.type) && !(w.type === 'stat' && NO_RANGE_STATS.has(w.metric))) bits.push(rangeName(w.range));
+  if (['stat', 'series', 'scatter', 'top'].includes(w.type) && !(w.type === 'stat' && NO_RANGE_STATS.has(w.metric))) {
+    bits.push(DASH.at ? '선택 기간' : DASH.span ? (DASH_SPANS.find((x) => x[0] === DASH.span) || ['', DASH.span])[1] : rangeName(w.range));
+  }
   if (w.host) bits.push(w.host.split('.')[0]);
   return bits.join(' · ');
 }
@@ -590,7 +606,7 @@ function paintStream() {
   const s = DASH.stream || {};
   const chip = dashHead.querySelector('.stream-chip');
   if (!chip) return;
-  if (DASH.at) { chip.replaceChildren(statusPill('warn', `과거 보기 · ${new Date(DASH.at).toLocaleString(gmLocale(), { hour12: false })} 기준`)); return; }
+  if (DASH.at) { chip.replaceChildren(statusPill('warn', DASH.from ? `과거 보기 · ${fmtWindow(DASH.from, DASH.at)}` : `과거 보기 · ${new Date(DASH.at).toLocaleString(gmLocale(), { hour12: false })} 기준`)); return; }
   if (dashEmpty) {
     const none = !DASH.at && s.ok && !s.lastTs && settings().dashLogs && use('caddy');
     dashEmpty.replaceChildren(...(none ? [callout('', h('b', null, '아직 수집된 요청이 없습니다'),
@@ -608,7 +624,8 @@ async function pollDash(now) {
   if (!dashGrid || !dashGrid.isConnected) return;
   if (!document.hidden || now) {
     try {
-      const r = await api('POST', '/api/dash/data', { widgets: DASH.widgets, at: DASH.at || 0 });
+      const body = DASH.at && DASH.from ? { widgets: DASH.widgets, from: DASH.from, to: DASH.at } : { widgets: DASH.widgets, range: DASH.span || '' };
+      const r = await api('POST', '/api/dash/data', body);
       if (gen !== DASH.gen) return;
       DASH.data = r.data;
       DASH.stream = r.stream;
@@ -648,24 +665,53 @@ function renderDashboard(panel) {
     buildGrid();
     pollDash(true);
   });
-  // live ↔ history (any past moment, from the log DB)
+  // live (last N for every widget) ↔ history (a From~To window from the log DB, at most a day)
   const mode = h('div', { class: 'segmented', role: 'radiogroup', 'aria-label': '보기 시점' },
     [['live', '실시간'], ['past', '과거 보기']].map(([v, l]) => h('label', null, h('input', { type: 'radio', name: 'dash-mode', value: v, checked: (v === 'past') === !!DASH.at }), h('span', null, l))));
-  const atInput = h('input', { type: 'datetime-local', class: 'auto-w', 'aria-label': '기준 시각', hidden: !DASH.at, value: DASH.at ? toLocalInput(DASH.at) : toLocalInput(Date.now() - 3600e3), max: toLocalInput(Date.now()) });
-  const setAt = () => {
-    const v = fromLocalInput(atInput.value);
-    if (!v) return;
-    DASH.at = Math.min(v, Date.now());
+  const spanSel = h('select', { class: 'auto-w', 'aria-label': '실시간 기간', title: '모든 위젯을 이 기간으로 봅니다 (「위젯 설정대로」는 위젯마다 정한 기간)', hidden: !!DASH.at },
+    DASH_SPANS.map(([v, l]) => h('option', { value: v, selected: DASH.span === v }, l)));
+  spanSel.addEventListener('change', () => {
+    DASH.span = spanSel.value;
+    try { localStorage.setItem('gm.dashSpan', DASH.span); } catch { /* private mode */ }
+    buildGrid();
+    pollDash(true);
+  });
+  const defTo = DASH.at || Date.now();
+  const fromIn = h('input', { type: 'datetime-local', class: 'auto-w', 'aria-label': '시작 시각', value: toLocalInput(DASH.from || defTo - 3600e3), max: toLocalInput(Date.now()) });
+  const toIn = h('input', { type: 'datetime-local', class: 'auto-w', 'aria-label': '끝 시각', value: toLocalInput(defTo), max: toLocalInput(Date.now()) });
+  const goPast = h('button', { type: 'button', class: 'btn' }, icon('search'), '조회');
+  const pastErr = h('span', { class: 'small danger-text', role: 'alert' });
+  const pastBox = h('div', { class: 'row tight dash-window', hidden: !DASH.at }, fromIn, h('span', { class: 'muted' }, '~'), toIn, goPast, pastErr);
+  const setWindow = () => {
+    const f = fromLocalInput(fromIn.value);
+    const t = Math.min(fromLocalInput(toIn.value) || Date.now(), Date.now());
+    pastErr.textContent = '';
+    if (!f || !t) { pastErr.textContent = '시작과 끝을 모두 고르세요'; return; }
+    if (f >= t) { pastErr.textContent = '시작이 끝보다 앞이어야 합니다'; return; }
+    if (t - f > DASH_MAX_WINDOW) { pastErr.textContent = '기간은 최대 1일입니다'; return; }
+    DASH.from = f;
+    DASH.at = t;
+    buildGrid();
     pollDash(true);
   };
-  mode.addEventListener('change', (e) => {
-    if (e.target.value === 'live') { DASH.at = 0; atInput.hidden = true; refresh.disabled = false; pollDash(true); } else { atInput.hidden = false; refresh.disabled = true; setAt(); }
+  // moving the start keeps the window within a day: pull the end along when it would exceed it
+  fromIn.addEventListener('change', () => {
+    const f = fromLocalInput(fromIn.value);
+    const t = fromLocalInput(toIn.value);
+    if (f && (!t || t <= f || t - f > DASH_MAX_WINDOW)) toIn.value = toLocalInput(Math.min(f + 3600e3, Date.now()));
   });
-  atInput.addEventListener('change', setAt);
-  refresh.disabled = !!DASH.at;
+  goPast.addEventListener('click', setWindow);
+  for (const x of [fromIn, toIn]) x.addEventListener('keydown', (e) => { if (e.key === 'Enter') setWindow(); });
+  mode.addEventListener('change', (e) => {
+    if (e.target.value === 'live') {
+      DASH.at = 0; DASH.from = 0; pastBox.hidden = true; spanSel.hidden = false; refresh.hidden = false; now.hidden = false; buildGrid(); pollDash(true);
+    } else { pastBox.hidden = false; spanSel.hidden = true; refresh.hidden = true; now.hidden = true; setWindow(); }
+  });
+  refresh.hidden = !!DASH.at; // the past window does not refresh itself
+  now.hidden = !!DASH.at;
   dashHead = h('div', { class: 'dash-head' },
     h('h1', null, '대시보드'), h('span', { class: 'stream-chip', 'aria-live': 'polite' }),
-    h('span', { class: 'grow' }), mode, atInput, refresh, now, resetBtn, addBtn, editBtn);
+    h('span', { class: 'grow' }), mode, spanSel, pastBox, refresh, now, resetBtn, addBtn, editBtn);
   let banner = null;
   if (!use('caddy') || (st.caddyMode && st.caddyMode !== 'docker')) {
     banner = callout('', h('b', null, '요청 통계 없음'), h('span', { class: 'small' }, use('caddy') ? 'Docker가 아닌 Caddy는 접근 로그를 길목이 읽을 수 없어 요청 관련 위젯이 비어 있습니다. 서비스 상태·컨테이너·이벤트 위젯은 동작합니다.' : 'Caddy를 쓰지 않는 구성이라 요청 관련 위젯은 비어 있습니다. 서비스 상태·컨테이너 위젯은 동작합니다.'));

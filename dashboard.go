@@ -29,7 +29,22 @@ type Widget struct {
 	Limit      int      `json:"limit,omitempty"`
 	Containers []string `json:"containers,omitempty"`
 	Warn       float64  `json:"warn,omitempty"` // stat: threshold for the warning state (0 = none)
+
+	span time.Duration // the dashboard's range (live "last N" or the past From~To window) over the widget's own; not stored
 }
+
+// dur: the time window a widget covers — the dashboard-wide range when one is chosen, else its own.
+func (w Widget) dur() time.Duration {
+	if w.span > 0 {
+		return w.span
+	}
+	return ranges[w.Range]
+}
+
+// dashSpans: the whole-dashboard ranges of the live view; the past view takes From~To up to dashMaxWindow.
+var dashSpans = map[string]time.Duration{"1m": time.Minute, "5m": 5 * time.Minute, "10m": 10 * time.Minute, "30m": 30 * time.Minute, "1h": time.Hour, "2h": 2 * time.Hour, "3h": 3 * time.Hour}
+
+const dashMaxWindow = 24 * time.Hour
 
 var (
 	widgetTypes   = map[string]bool{"stat": true, "series": true, "scatter": true, "top": true, "health": true, "containers": true, "certs": true, "events": true}
@@ -173,7 +188,7 @@ type seriesLine struct {
 }
 
 func (a *App) statData(wd Widget) map[string]any {
-	rng := ranges[wd.Range]
+	rng := wd.dur()
 	out := map[string]any{}
 	_, ts, bs := a.mon.series(rng, wd.Host, 30)
 	spark := make([]float64, len(bs))
@@ -239,6 +254,7 @@ func (a *App) statData(wd Widget) map[string]any {
 		a.mon.mu.Unlock()
 		spark = nil
 	case "healthUp":
+		cr := a.caddyRunState(context.Background()) // before the monitor lock: it may ask Docker
 		a.mon.mu.Lock()
 		up, n := 0, 0
 		for _, h := range a.mon.health {
@@ -248,6 +264,10 @@ func (a *App) statData(wd Widget) map[string]any {
 			}
 		}
 		a.mon.mu.Unlock()
+		if cr.Down {
+			up = 0 // Caddy stopped: no site is reachable, whatever the upstreams say
+			out["caddyDown"] = true
+		}
 		val, unit = float64(up), fmt.Sprintf("/ %d", n)
 		out["down"] = n - up
 		spark = nil
@@ -271,12 +291,12 @@ func (a *App) statData(wd Widget) map[string]any {
 }
 
 func (a *App) seriesData(wd Widget) seriesOut {
-	step, ts, bs := a.mon.series(ranges[wd.Range], wd.Host, 60)
+	step, ts, bs := a.mon.series(wd.dur(), wd.Host, 60)
 	return buildSeries(wd.Metric, step, ts, bs)
 }
 
 func (a *App) scatterData(wd Widget) map[string]any {
-	since := time.Now().Add(-ranges[wd.Range]).UnixMilli()
+	since := time.Now().Add(-wd.dur()).UnixMilli()
 	rs := a.mon.recent(since)
 	pts := make([][4]float64, 0, len(rs))
 	for _, r := range rs {
@@ -299,7 +319,7 @@ type topRow struct {
 }
 
 func (a *App) topData(wd Widget) map[string]any {
-	since := time.Now().Add(-ranges[wd.Range]).UnixMilli()
+	since := time.Now().Add(-wd.dur()).UnixMilli()
 	rs := a.mon.recent(since)
 	if wd.Dim == "slow" {
 		var list []ReqRec
@@ -365,7 +385,7 @@ func (a *App) topData(wd Widget) map[string]any {
 		rows = rows[:wd.Limit]
 	}
 	out := map[string]any{"rows": rows}
-	if a.mon.ringSpan() < ranges[wd.Range] {
+	if a.mon.ringSpan() < wd.dur() {
 		out["partial"] = true
 	}
 	return out
@@ -395,7 +415,7 @@ func (a *App) healthData() map[string]any {
 		}
 		return list[i].Sub < list[j].Sub
 	})
-	return map[string]any{"services": list}
+	return map[string]any{"services": list, "caddy": a.caddyRunState(context.Background())}
 }
 
 func (a *App) containersData(wd Widget) map[string]any {
@@ -511,7 +531,10 @@ func (a *App) eventsData(wd Widget) map[string]any {
 func (a *App) postDashData(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Widgets []Widget `json:"widgets"`
-		At      int64    `json:"at"` // unix ms; 0 = live
+		At      int64    `json:"at"`    // unix ms; 0 = live (older clients: the widgets' own ranges ending here)
+		Range   string   `json:"range"` // live: one of dashSpans for every widget; "" = each widget's own
+		From    int64    `json:"from"`  // past: unix ms window From~To (at most dashMaxWindow)
+		To      int64    `json:"to"`
 	}
 	if err := readJSON(r, &in); err != nil {
 		fail(w, 400, err)
@@ -523,13 +546,41 @@ func (a *App) postDashData(w http.ResponseWriter, r *http.Request) {
 	if in.At > 0 && in.At < end.UnixMilli() {
 		end = time.UnixMilli(in.At)
 	}
+	var span time.Duration
+	if in.From > 0 || in.To > 0 {
+		if in.From <= 0 || in.To <= in.From {
+			fail(w, 400, errors.New("과거 보기: 시작이 끝보다 앞이어야 합니다"))
+			return
+		}
+		if time.Duration(in.To-in.From)*time.Millisecond > dashMaxWindow {
+			fail(w, 400, errors.New("과거 보기: 기간은 최대 1일입니다"))
+			return
+		}
+		if in.To > end.UnixMilli() {
+			in.To = end.UnixMilli()
+		}
+		if in.To <= in.From {
+			fail(w, 400, errors.New("과거 보기: 시작이 미래입니다"))
+			return
+		}
+		end, in.At = time.UnixMilli(in.To), in.To
+		span = time.Duration(in.To-in.From) * time.Millisecond
+	} else if in.Range != "" {
+		d, ok := dashSpans[in.Range]
+		if !ok {
+			fail(w, 400, fmt.Errorf("알 수 없는 기간: %s", in.Range))
+			return
+		}
+		span = d
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	for _, wd := range in.Widgets {
 		if normalizeWidget(&wd) != nil {
 			continue
 		}
-		if in.At > 0 || ranges[wd.Range] > 24*time.Hour {
+		wd.span = span
+		if in.At > 0 || wd.dur() > 24*time.Hour {
 			switch wd.Type {
 			case "stat":
 				data[wd.ID] = a.dbStat(ctx, wd, end)
@@ -665,5 +716,5 @@ func (a *App) getHealth(w http.ResponseWriter, r *http.Request) {
 		out[id] = x
 	}
 	a.mon.mu.Unlock()
-	writeJSON(w, 200, map[string]any{"services": out})
+	writeJSON(w, 200, map[string]any{"services": out, "caddy": a.caddyRunState(r.Context())})
 }

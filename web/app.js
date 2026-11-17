@@ -502,6 +502,8 @@ function applyComponentTabs() {
 async function refreshState() {
   S.state = await api('GET', '/api/state');
   S.state.services = S.state.services || [];
+  const ver = document.getElementById('brand-ver');
+  if (ver) ver.textContent = S.state.version ? `v${S.state.version}` : '';
   renderTopbar();
   applyComponentTabs();
 }
@@ -881,10 +883,26 @@ function autheliaCell(s) {
     (a.groups || []).map((g) => h('span', { class: 'badge' }, g)));
 }
 
-/** Upstream health (probed by Gilmok every 60 s): 정상 / 응답 없음 / 확인 중. */
+/** Caddy's own state in words ("exited" → 멈춤 …). */
+function caddyStateText(c) {
+  const m = { exited: '멈춤', created: '멈춤', restarting: '재시작 반복', paused: '일시 정지', dead: '멈춤', unreachable: '관리 API 응답 없음', '': '컨테이너 없음' };
+  const st = (c && c.state) || ''; // "" (no container) is left out of the JSON
+  return st in m ? m[st] : st;
+}
+
+/**
+ * Service health: Gilmok probes each upstream directly (every 60 s), which says nothing about Caddy —
+ * when Caddy is down no site is reachable even though the upstreams answer, so that wins.
+ * 정상 / 응답 없음 / Caddy 중단 / 확인 중.
+ */
 function healthOf(s) {
   if (!s.enabled || s.dnsOnly || !s.upstream) return null;
   const x = (S.health || {})[s.id];
+  const cr = S.caddyRun;
+  if (cr && cr.down) {
+    const up = x ? (x.ok ? `대상 ${s.upstream}은 응답합니다 (${Math.round(x.ms)}ms).` : `대상 ${s.upstream}도 응답하지 않습니다.`) : '';
+    return { st: 'down', text: 'Caddy 중단', title: `Caddy(${cr.name})가 ${caddyStateText(cr)} 상태라 이 사이트에 접속할 수 없습니다. ${up}`.trim() };
+  }
   if (!x) return { st: 'wait', text: '확인 중', title: '아직 확인하지 않았습니다 (60초마다)' };
   return x.ok
     ? { st: 'ok', text: `정상 ${x.ms < 1 ? '<1' : Math.round(x.ms)}ms`, title: `${s.upstream} 연결 정상 · ${fmtTime(new Date(x.checked).toISOString())}` }
@@ -899,7 +917,11 @@ function healthBadge(s) {
 }
 
 async function loadHealth() {
-  try { S.health = (await api('GET', '/api/health')).services || {}; } catch { /* keep the last */ }
+  try {
+    const r = await api('GET', '/api/health');
+    S.health = r.services || {};
+    S.caddyRun = r.caddy || null;
+  } catch { /* keep the last */ }
   return S.health;
 }
 
@@ -935,7 +957,8 @@ function renderServices(panel) {
     const ok = list.filter((x) => x.st === 'ok').length;
     hsum.replaceChildren();
     if (!list.length) return;
-    append(hsum, [down ? h('span', { class: 'dpill crit' }, `✗ 응답 없음 ${down}`) : null, ok ? h('span', { class: 'dpill good' }, `✓ 정상 ${ok}`) : null,
+    const cd = S.caddyRun && S.caddyRun.down;
+    append(hsum, [cd ? h('span', { class: 'dpill crit', title: `Caddy(${S.caddyRun.name}) ${caddyStateText(S.caddyRun)}` }, `✗ Caddy 중단 — 사이트 ${down}개 접속 불가`) : down ? h('span', { class: 'dpill crit' }, `✗ 응답 없음 ${down}`) : null, ok ? h('span', { class: 'dpill good' }, `✓ 정상 ${ok}`) : null,
       ok + down < list.length ? h('span', { class: 'muted small' }, `확인 중 ${list.length - ok - down}`) : null]);
   };
   const tableBox = h('div', { class: 'glass table-wrap' });
@@ -974,7 +997,7 @@ function renderServices(panel) {
     if (map) { S.topoInfo = null; mapBox.replaceChildren(topologyPanel((s) => openServiceDrawer(s))); }
     else tableBox.replaceChildren(serviceTable());
   };
-  const healthSig = () => JSON.stringify(Object.entries(S.health || {}).map(([k, v]) => [k, v && v.st]).sort());
+  const healthSig = () => JSON.stringify(S.state.services.map((s) => [s.id, (healthOf(s) || {}).st]));
   const healthTick = async () => {
     if (!hsum.isConnected) return;
     const before = healthSig();

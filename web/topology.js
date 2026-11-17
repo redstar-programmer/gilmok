@@ -563,7 +563,7 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
       // badges (right side)
       const bs = [];
       const hl = healthOf(s);
-      if (hl && hl.st === 'down') bs.push(['응답 없음', TC.danger]);
+      if (hl && hl.st === 'down') bs.push([hl.text === 'Caddy 중단' ? 'Caddy 중단' : '응답 없음', TC.danger]);
       if (!s.enabled) bs.push(['중지', TC.gray]);
       if (s.waf && !s.dnsOnly) bs.push([s.waf === 'block' ? 'WAF' : 'WAF 탐지', s.waf === 'block' ? TC.danger : TC.warn]);
       if (prot) bs.push([s.authelia.policy === 'one_factor' ? '1FA' : '2FA', TC.accent]);
@@ -752,7 +752,7 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
   const sum = h('div', { class: 'topo-sum' },
     modeSel, zoomCtl, blindBtn,
     h('span', { class: 'badge' }, `서비스 ${en.length}/${all.length}`),
-    (() => { const hs = all.map(healthOf).filter(Boolean); const down = hs.filter((x) => x.st === 'down').length; return hs.length ? h('span', { class: `badge ${down ? 'danger' : 'ok'}` }, down ? `✗ 응답 없음 ${down}` : `● 모두 정상 ${hs.length}`) : null; })(),
+    (() => { const hs = all.map(healthOf).filter(Boolean); const down = hs.filter((x) => x.st === 'down').length; if (!hs.length) return null; if (S.caddyRun && S.caddyRun.down) return h('span', { class: 'badge danger' }, `✗ Caddy 중단 — 접속 불가 ${down}`); return h('span', { class: `badge ${down ? 'danger' : 'ok'}` }, down ? `✗ 응답 없음 ${down}` : `● 모두 정상 ${hs.length}`); })(),
     h('span', { class: 'badge public' }, `공개 ${en.filter((s) => s.exposure === 'public').length}`),
     privOn() ? h('span', { class: 'badge ts' }, `${use('tailscale') ? 'Tailscale' : '사설'} ${en.filter((s) => s.exposure !== 'public').length}`) : null,
     use('authelia') ? h('span', { class: 'badge accent' }, icon('shield'), `Authelia ${authN}`) : null,

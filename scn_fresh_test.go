@@ -438,3 +438,41 @@ func TestFreshStackStatusForDashboard(t *testing.T) {
 		t.Fatalf("FRESH-26 unknown stack: %d", code)
 	}
 }
+
+// FRESH-27: service health probes the upstreams directly, so with Caddy stopped they still answer —
+// /api/health also tells Caddy's state so the list / map / dashboard show the sites as unreachable.
+func TestFreshHealthKnowsCaddyDown(t *testing.T) {
+	f := newFullApp(t)
+	c := f.admin(t)
+	f.set(func(d *Data) { d.Settings.UseCaddy, d.Settings.CaddyMode, d.Settings.CaddyContainer = true, "docker", "my-caddy" })
+	state := "exited"
+	installFakeDocker(t, func(args []string, _ []byte) (string, error) {
+		if args[0] == "version" {
+			return "27.0.0", nil
+		}
+		if strings.Contains(strings.Join(args, " "), "State.Status") {
+			return state + "|caddy", nil
+		}
+		return "", nil
+	})
+	m := c.must(200, "GET", "/api/health", "")
+	cr := m["caddy"].(map[string]any)
+	if cr["known"] != true || cr["down"] != true || cr["state"] != "exited" || cr["name"] != "my-caddy" {
+		t.Fatalf("FRESH-27 down: %v", cr)
+	}
+	caddyRunMu.Lock()
+	caddyRunKey = "" // drop the 10 s cache
+	caddyRunMu.Unlock()
+	state = "running"
+	m = c.must(200, "GET", "/api/health", "")
+	if cr := m["caddy"].(map[string]any); cr["down"] != false {
+		t.Fatalf("FRESH-27 running: %v", cr)
+	}
+	caddyRunMu.Lock()
+	caddyRunKey = ""
+	caddyRunMu.Unlock()
+	f.set(func(d *Data) { d.Settings.UseCaddy = false })
+	if cr := c.must(200, "GET", "/api/health", "")["caddy"].(map[string]any); cr["known"] != false {
+		t.Fatalf("FRESH-27 Caddy not used: %v", cr)
+	}
+}
