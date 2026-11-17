@@ -14,6 +14,8 @@
 
 </div>
 
+<p align="center"><img src="docs/images/dashboard.png" alt="길목 대시보드" width="900"></p>
+
 ---
 
 ## 만든 이유
@@ -57,6 +59,27 @@ Caddy, Authelia, CrowdSec이 아직 없다면 길목이 옆 컨테이너로 설�
 
 ### 화면 언어
 한국어와 영어를 지원합니다. 처음 접속할 때 고른 언어가 그 설치의 언어가 되고, 나중에 설정 탭에서 바꿀 수 있습니다.
+
+## 화면
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><a href="docs/images/dashboard.png"><img src="docs/images/dashboard.png" alt="대시보드 — 요청·응답시간·상태코드, 서비스 상태, 컨테이너, 이벤트"></a><br><sub>대시보드 — 요청·응답시간·상태코드, 서비스 상태, 컨테이너, 이벤트</sub></td>
+    <td width="50%" valign="top"><a href="docs/images/topology.png"><img src="docs/images/topology.png" alt="구성도 — 인터넷부터 각 서비스까지의 경로"></a><br><sub>구성도 — 인터넷부터 각 서비스까지의 경로</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><a href="docs/images/caddy.png"><img src="docs/images/caddy.png" alt="Caddy — 연결 점검과 길목이 설치한 컨테이너 관리"></a><br><sub>Caddy — 연결 점검과 길목이 설치한 컨테이너 관리</sub></td>
+    <td width="50%" valign="top"><a href="docs/images/authelia.png"><img src="docs/images/authelia.png" alt="Authelia — 연결·접근 정책·사용자"></a><br><sub>Authelia — 연결·접근 정책·사용자</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><a href="docs/images/cloudflare.png"><img src="docs/images/cloudflare.png" alt="Cloudflare — 토큰·DNS 레코드·DDNS·엣지 보안"></a><br><sub>Cloudflare — 토큰·DNS 레코드·DDNS·엣지 보안</sub></td>
+    <td width="50%" valign="top"><a href="docs/images/crowdsec.png"><img src="docs/images/crowdsec.png" alt="CrowdSec — 로그 수집과 Cloudflare 차단 동기화"></a><br><sub>CrowdSec — 로그 수집과 Cloudflare 차단 동기화</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><a href="docs/images/logs.png"><img src="docs/images/logs.png" alt="로그 — 감사·보안·시스템·요청 기록"></a><br><sub>로그 — 감사·보안·시스템·요청 기록</sub></td>
+    <td width="50%" valign="top"><a href="docs/images/settings.png"><img src="docs/images/settings.png" alt="설정 — 쓰는 구성요소만 골라 쓰기"></a><br><sub>설정 — 쓰는 구성요소만 골라 쓰기</sub></td>
+  </tr>
+</table>
 
 ## 기술 스택
 
@@ -108,7 +131,7 @@ docker compose pull
 docker compose up -d
 ```
 
-설정과 로그는 `./data`에 남아 있습니다. 버전을 고정하려면 compose 파일의 이미지를 `vitive/gilmok:0.1.8`처럼 바꾸세요.
+설정과 로그는 `./data`에 남아 있습니다. 버전을 고정하려면 compose 파일의 이미지를 `vitive/gilmok:0.1.9`처럼 바꾸세요.
 
 ## 환경변수
 

@@ -14,6 +14,8 @@
 
 </div>
 
+<p align="center"><img src="docs/images/dashboard.png" alt="Gilmok dashboard" width="900"></p>
+
 ---
 
 ## Why
@@ -57,6 +59,27 @@ One account per person, with roles such as administrator, operator and view-only
 
 ### Languages
 Korean and English. The language picked on the first visit becomes the language of that install and can be changed later in the Settings tab.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><a href="docs/images/dashboard.png"><img src="docs/images/dashboard.png" alt="Dashboard — requests, latency, status codes, service health, containers, events"></a><br><sub>Dashboard — requests, latency, status codes, service health, containers, events</sub></td>
+    <td width="50%" valign="top"><a href="docs/images/topology.png"><img src="docs/images/topology.png" alt="Topology — the path from the internet to each service"></a><br><sub>Topology — the path from the internet to each service</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><a href="docs/images/caddy.png"><img src="docs/images/caddy.png" alt="Caddy — connection checks and the container Gilmok installed"></a><br><sub>Caddy — connection checks and the container Gilmok installed</sub></td>
+    <td width="50%" valign="top"><a href="docs/images/authelia.png"><img src="docs/images/authelia.png" alt="Authelia — connection, access policy, users"></a><br><sub>Authelia — connection, access policy, users</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><a href="docs/images/cloudflare.png"><img src="docs/images/cloudflare.png" alt="Cloudflare — token, DNS records, DDNS, edge security"></a><br><sub>Cloudflare — token, DNS records, DDNS, edge security</sub></td>
+    <td width="50%" valign="top"><a href="docs/images/crowdsec.png"><img src="docs/images/crowdsec.png" alt="CrowdSec — log collection and Cloudflare ban sync"></a><br><sub>CrowdSec — log collection and Cloudflare ban sync</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><a href="docs/images/logs.png"><img src="docs/images/logs.png" alt="Logs — audit, security, system and request records"></a><br><sub>Logs — audit, security, system and request records</sub></td>
+    <td width="50%" valign="top"><a href="docs/images/settings.png"><img src="docs/images/settings.png" alt="Settings — use only the components you need"></a><br><sub>Settings — use only the components you need</sub></td>
+  </tr>
+</table>
 
 ## Tech stack
 
@@ -108,7 +131,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Settings and logs stay in `./data`. To pin a version, change the image in the compose file to something like `vitive/gilmok:0.1.7`.
+Settings and logs stay in `./data`. To pin a version, change the image in the compose file to something like `vitive/gilmok:0.1.9`.
 
 ## Environment variables
 
