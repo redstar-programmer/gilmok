@@ -444,7 +444,9 @@ func TestFreshStackStatusForDashboard(t *testing.T) {
 func TestFreshHealthKnowsCaddyDown(t *testing.T) {
 	f := newFullApp(t)
 	c := f.admin(t)
-	f.set(func(d *Data) { d.Settings.UseCaddy, d.Settings.CaddyMode, d.Settings.CaddyContainer = true, "docker", "my-caddy" })
+	f.set(func(d *Data) {
+		d.Settings.UseCaddy, d.Settings.CaddyMode, d.Settings.CaddyContainer = true, "docker", "my-caddy"
+	})
 	state := "exited"
 	installFakeDocker(t, func(args []string, _ []byte) (string, error) {
 		if args[0] == "version" {
@@ -474,5 +476,53 @@ func TestFreshHealthKnowsCaddyDown(t *testing.T) {
 	f.set(func(d *Data) { d.Settings.UseCaddy = false })
 	if cr := c.must(200, "GET", "/api/health", "")["caddy"].(map[string]any); cr["known"] != false {
 		t.Fatalf("FRESH-27 Caddy not used: %v", cr)
+	}
+}
+
+// FRESH-28: an update recreates the Gilmok container and drops the networks it joined at install
+// time (docker network connect) — on start it joins its managed stacks' networks again.
+func TestFreshRejoinStackNetworks(t *testing.T) {
+	f := newFullApp(t)
+	f.set(func(d *Data) {
+		d.SelfName = "gilmok"
+		d.Stacks = map[string]*ManagedStack{
+			"caddy":    {Name: "caddy", Container: "gilmok-caddy", Network: "reverseproxy", Dir: f.dir},
+			"crowdsec": {Name: "crowdsec", Container: "gilmok-crowdsec", Network: "reverseproxy", Dir: f.dir},
+			"authelia": {Name: "authelia", Container: "gone-authelia", Network: "authnet", Dir: f.dir},
+		}
+	})
+	var connects []string
+	selfNets := `{"gilmok_default":{}}`
+	installFakeDocker(t, func(args []string, _ []byte) (string, error) {
+		j := strings.Join(args, " ")
+		switch {
+		case args[0] == "version":
+			return "27.0.0", nil
+		case args[0] == "inspect" && args[len(args)-1] == "gilmok":
+			return selfNets, nil
+		case args[0] == "inspect" && strings.HasPrefix(args[len(args)-1], "gilmok-"):
+			return `{"reverseproxy":{},"bridge":{}}`, nil
+		case args[0] == "inspect":
+			return "", fmt.Errorf("no such container")
+		case strings.HasPrefix(j, "network connect"):
+			connects = append(connects, args[2])
+			return "", nil
+		}
+		return "", nil
+	})
+	joined, ok := f.app.rejoinStackNetworks(context.Background())
+	if !ok || strings.Join(joined, ",") != "authnet,reverseproxy" || strings.Join(connects, ",") != "authnet,reverseproxy" {
+		t.Fatalf("FRESH-28 rejoin: ok=%v joined=%v connects=%v", ok, joined, connects)
+	}
+	// already on them: nothing to do
+	connects = nil
+	selfNets = `{"gilmok_default":{},"reverseproxy":{},"authnet":{}}`
+	if joined, _ := f.app.rejoinStackNetworks(context.Background()); len(joined) != 0 || len(connects) != 0 {
+		t.Fatalf("FRESH-28 no-op: %v %v", joined, connects)
+	}
+	// Gilmok on the host (no container name): never touches Docker networks
+	f.set(func(d *Data) { d.SelfName = "" })
+	if joined, ok := f.app.rejoinStackNetworks(context.Background()); !ok || len(joined) != 0 {
+		t.Fatalf("FRESH-28 host: %v", joined)
 	}
 }

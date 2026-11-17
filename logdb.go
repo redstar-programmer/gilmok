@@ -488,6 +488,7 @@ type ReqQuery struct {
 	From, To  int64
 	Host, Q   string
 	Status    string // "", 2xx, 3xx, 4xx, 5xx or exact code
+	Classes   []int  // status classes to keep (2 = 2xx …); empty = all
 	MinMs     float64
 	MaxMs     float64
 	Before    int64
@@ -518,6 +519,14 @@ func (l *LogDB) QueryRequests(ctx context.Context, q ReqQuery) ([]ReqRow, error)
 		} else if n, err := strconv.Atoi(s); err == nil {
 			conds, args = append(conds, "status=?"), append(args, n)
 		}
+	}
+	if len(q.Classes) > 0 {
+		ph := make([]string, len(q.Classes))
+		for i, c := range q.Classes {
+			ph[i] = "?"
+			args = append(args, c)
+		}
+		conds = append(conds, "status/100 IN ("+strings.Join(ph, ",")+")")
 	}
 	if q.MinMs > 0 {
 		conds, args = append(conds, "ms>=?"), append(args, q.MinMs)

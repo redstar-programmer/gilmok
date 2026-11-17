@@ -211,6 +211,22 @@ func TestScnDashboard(t *testing.T) {
 	}
 	boss.must(400, "POST", "/api/dash/data", fmt.Sprintf(`{"from":%d,"to":%d,"widgets":[]}`, now-25*3600_000, now))
 	boss.must(400, "POST", "/api/dash/data", fmt.Sprintf(`{"from":%d,"to":%d,"widgets":[]}`, now, now-1000))
+	// DASH-11: scatter dots carry their site and request; the request list filters by status class
+	b, _ = json.Marshal(map[string]any{"widgets": []Widget{{ID: "c", Type: "scatter", Range: "15m"}}})
+	m = boss.must(200, "POST", "/api/dash/data", string(b))
+	c11 := m["data"].(map[string]any)["c"].(map[string]any)
+	if hs := c11["hosts"].([]any); len(hs) != 1 || hs[0] != "a.example.com" || len(c11["reqs"].([]any)) != len(c11["points"].([]any)) {
+		t.Fatalf("DASH-11 points: %v", c11["hosts"])
+	}
+	for _, c := range []struct {
+		st   string
+		want int
+	}{{"", 50}, {"5", 16}, {"2,4", 34}, {"0", 0}} {
+		r := boss.must(200, "GET", fmt.Sprintf("/api/dash/requests?from=%d&st=%s", now-3600_000, c.st), "")
+		if int(r["total"].(float64)) != c.want {
+			t.Errorf("DASH-11 st=%q: %v", c.st, r["total"])
+		}
+	}
 	// DASH-08: odd ranges never overflow
 	for _, q := range []string{"", "?from=abc&to=xyz", "?from=9223372036854775807&to=-9223372036854775808", "?min=-1&max=1e309"} {
 		if code, _ := boss.do("GET", "/api/dash/requests"+q, ""); code != 200 {

@@ -521,6 +521,7 @@ SecRuleEngine Off`·`942100 "x"`·`abc`, 메모에 개행·백틱·201자 | ID�
 | DASH-08 | 요청 목록 범위 | `from`·`to` 없음/잘못/아주 큼 | 기본 범위, 넘침 없음 | P1 | ✅ `TestScnDashboard` |
 | DASH-09 | 실시간 전체 기간 | `range` 1m~3h, 모르는 값 | 모든 위젯이 그 기간(위젯 자체 기간 무시), 모르는 값 400 | P1 | ✅ `TestScnDashboard` |
 | DASH-10 | 과거 From~To | 1시간 창 / 25시간 / 끝이 시작보다 앞 | 창 그대로 DB에서, 실시간 전용 위젯은 liveOnly, 1일 초과·역순 400 | P1 | ✅ `TestScnDashboard` |
+| DASH-11 | 상태코드 필터·점 상세 | 응답시간 분포 점 / `st` 없음·5·2,4·0(모두 숨김) | 점마다 사이트·요청, 요청 목록이 상태 클래스로 걸러짐 | P1 | ✅ `TestScnDashboard` · 화면: 범례 클릭 필터(분포·상태코드별 추이 함께), 점 위에서만 상세, 점 클릭 = 그 요청 (2026-11-17) |
 
 ## LOG — 로그 DB·디스크·감사 (`logdb.go`, `audit.go`, `logs_api.go`)
 
@@ -778,6 +779,7 @@ go test -count=1 -run 'Groups|Bulk' ./...   # 일부
 | FRESH-25 | 설치 실패 원인 | 컨테이너가 바로 멈춤 | 정리 전에 로그 30줄을 작업 로그에, 원인 줄(error/fatal)을 오류 메시지에 | P1 | ✅ `TestFreshCrashReason` |
 | FRESH-26 | 대시보드 구성요소 상태 | 관리형 컨테이너 실행 중 / 멈춤 / 재시작 반복 / 없음 | 상태·재시작 횟수·원인 줄, 로그 API | P1 | ✅ `TestFreshStackStatusForDashboard` · 실제 Docker: 멈춤→시작, 삭제→다시 설치(같은 이름·네트워크), 깨진 Caddyfile 재시작 반복(원인 표시)→다시 설치, 화면 「시작」 버튼 (2026-11-17) |
 | FRESH-27 | Caddy 중단 시 서비스 상태 | Caddy 컨테이너 멈춤·없음 / 실행 중 / Caddy 미사용 | `/api/health`의 `caddy.down` → 목록·구성도·대시보드에 「Caddy 중단」(대상 응답은 툴팁) | P1 | ✅ `TestFreshHealthKnowsCaddyDown` · 화면 확인 (2026-11-17) |
+| FRESH-28 | 업데이트 뒤 네트워크 재연결 | 길목 컨테이너가 새로 만들어져 설치 때 붙은 네트워크가 빠짐 / 이미 붙어 있음 / 길목이 호스트에서 실행 | 시작 때 관리형 구성요소의 네트워크에 다시 연결(시스템 이벤트), 할 일 없으면 그대로, 호스트 실행이면 건드리지 않음 | P1 | ✅ `TestFreshRejoinStackNetworks` |
 | E2E-01~22 | 실제 처음 설치 | 실제 Docker: 언어 → 관리자 → Caddy(네트워크 지정·내부 인증서) → Authelia(네트워크 비움) → CrowdSec → 서비스 → 점검 → 적용 → 실제 접속 → CrowdSec 재시작 → 보류 | 전부 통과 | P1 | ✅ 24/24 (2026-11-11, 실제 Docker) |
 | E2E-P2-01~14 | 예전 Caddyfile → 관리형 스택 | PC 파일 가져오기 → CA 없이 적용(mTLS 보류) → 잘못된 PEM → CA 넣고 적용 → 클라이언트 인증서 없는 접속 거부 → 점검 | 전부 통과 | P1 | ✅ 14/14 (2026-11-11, 실제 Docker) |
 

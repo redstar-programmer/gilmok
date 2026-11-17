@@ -298,17 +298,53 @@ func (a *App) seriesData(wd Widget) seriesOut {
 func (a *App) scatterData(wd Widget) map[string]any {
 	since := time.Now().Add(-wd.dur()).UnixMilli()
 	rs := a.mon.recent(since)
-	pts := make([][4]float64, 0, len(rs))
+	var list []ReqRec
 	for _, r := range rs {
-		if wd.Host != "" && r.Host != wd.Host {
-			continue
+		if wd.Host == "" || r.Host == wd.Host {
+			list = append(list, r)
 		}
-		pts = append(pts, [4]float64{float64(r.T), r.Ms, float64(r.Status), 0})
 	}
-	if len(pts) > 6000 { // keep the newest
-		pts = pts[len(pts)-6000:]
+	if len(list) > 6000 { // keep the newest
+		list = list[len(list)-6000:]
 	}
-	return map[string]any{"from": since, "to": time.Now().UnixMilli(), "points": pts}
+	out := scatterPoints(list)
+	out["from"], out["to"] = since, time.Now().UnixMilli()
+	return out
+}
+
+// scatterPoints: [t, ms, status, host index] per request + the hosts and "METHOD uri" (for the
+// hover and the click detail of a dot).
+func scatterPoints(list []ReqRec) map[string]any {
+	pts := make([][4]float64, 0, len(list))
+	reqs := make([]string, 0, len(list))
+	hosts := []string{}
+	hi := map[string]int{}
+	for _, r := range list {
+		i, ok := hi[r.Host]
+		if !ok {
+			i = len(hosts)
+			hi[r.Host] = i
+			hosts = append(hosts, r.Host)
+		}
+		pts = append(pts, [4]float64{float64(r.T), r.Ms, float64(r.Status), float64(i)})
+		u := r.URI
+		if len(u) > 120 {
+			u = u[:120] + "…"
+		}
+		reqs = append(reqs, strings.TrimSpace(r.Method+" "+u))
+	}
+	return map[string]any{"points": pts, "hosts": hosts, "reqs": reqs}
+}
+
+// statusClasses: "2,4" → [2 4] (the dashboard's status filter); nil = all.
+func statusClasses(v string) []int {
+	var out []int
+	for _, p := range strings.Split(v, ",") {
+		if n, err := strconv.Atoi(strings.TrimSpace(p)); err == nil && n >= 0 && n <= 5 { // 0 = every class hidden: nothing matches
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 type topRow struct {
@@ -651,10 +687,22 @@ func (a *App) getDashRequests(w http.ResponseWriter, r *http.Request) {
 	from, to := ms("from", 0), ms("to", time.Now().UnixMilli()+60_000)
 	lo, hi := f("min", 0), f("max", math.MaxFloat64)
 	host := strings.ToLower(q.Get("host"))
+	classes := statusClasses(q.Get("st"))
+	keep := func(status int) bool {
+		if len(classes) == 0 {
+			return true
+		}
+		for _, c := range classes {
+			if status/100 == c {
+				return true
+			}
+		}
+		return false
+	}
 	if a.mon.ringSpan() < time.Since(time.UnixMilli(from)) || q.Get("db") == "1" {
 		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 		defer cancel()
-		rows, err := a.ldb.QueryRequests(ctx, ReqQuery{From: from, To: to, Host: host, MinMs: lo, MaxMs: func() float64 {
+		rows, err := a.ldb.QueryRequests(ctx, ReqQuery{From: from, To: to, Host: host, Classes: classes, MinMs: lo, MaxMs: func() float64 {
 			if hi > 1e11 {
 				return 0
 			}
@@ -673,7 +721,7 @@ func (a *App) getDashRequests(w http.ResponseWriter, r *http.Request) {
 	}
 	var out []ReqRec
 	for _, x := range a.mon.recent(from) {
-		if x.T <= to && x.Ms >= lo && x.Ms <= hi && (host == "" || x.Host == host) {
+		if x.T <= to && x.Ms >= lo && x.Ms <= hi && (host == "" || x.Host == host) && keep(x.Status) {
 			out = append(out, x)
 		}
 	}

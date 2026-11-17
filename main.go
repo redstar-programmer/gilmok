@@ -27,7 +27,7 @@ import (
 //go:embed web
 var webFS embed.FS
 
-var version = "0.1.9"
+var version = "0.1.10"
 
 func main() {
 	dataDir := env("GM_DATA", "/data")
@@ -53,6 +53,7 @@ func main() {
 	app.cs.kick = make(chan struct{}, 1)
 	app.mon = newMonitor()
 	go app.monitorLoop()
+	go app.rejoinLoop() // an update recreated Gilmok: back onto its managed stacks' networks
 	go app.diskGuardLoop()
 	go app.metricsFlushLoop()
 	go app.autheliaStreamLoop()

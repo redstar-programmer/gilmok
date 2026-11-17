@@ -32,6 +32,26 @@ const STATUS_CLASS = [
 ];
 const statusColor = (code) => (code >= 500 ? C.crit : code >= 400 ? C.warn : code >= 300 ? C.neutral : C.s1);
 
+/** status classes hidden by the dashboard's status filter (the clickable legends; remembered per browser) */
+const DASH_HIDE_ST = (() => { try { return new Set(JSON.parse(localStorage.getItem('gm.dashHideSt') || '[]')); } catch { return new Set(); } })();
+const stKey = (code) => `s${Math.min(5, Math.max(2, Math.floor(code / 100)))}`;
+const stShown = (code) => !DASH_HIDE_ST.has(stKey(code));
+/** "2,4" — the classes shown, for the request list; "" when nothing is hidden */
+const stParam = () => (DASH_HIDE_ST.size ? STATUS_CLASS.filter((c) => !DASH_HIDE_ST.has(c.key)).map((c) => c.key[1]).join(',') || '0' : '');
+function statusLegend(counts) {
+  return h('div', { class: 'dlegend st-filter', role: 'group', 'aria-label': '상태코드 필터 — 눌러서 숨기기·보이기' }, STATUS_CLASS.map((c) => {
+    const off = DASH_HIDE_ST.has(c.key);
+    const b = h('button', { type: 'button', class: off ? 'off' : '', 'aria-pressed': String(!off), title: off ? `${c.name} 다시 보이기` : `${c.name} 숨기기 (응답시간 분포·상태코드별 추이)` },
+      h('i', { style: { background: c.color } }), c.name, counts ? h('b', null, fmtNum(counts[c.key] || 0)) : null);
+    b.addEventListener('click', () => {
+      if (off) DASH_HIDE_ST.delete(c.key); else DASH_HIDE_ST.add(c.key);
+      try { localStorage.setItem('gm.dashHideSt', JSON.stringify([...DASH_HIDE_ST])); } catch { /* private mode */ }
+      paintAll();
+    });
+    return b;
+  }));
+}
+
 const WIDGET_TYPES = {
   stat: { name: '숫자 카드', desc: '지표 하나를 크게, 아래에 작은 추이선', def: { w: 1, h: 1, metric: 'rpm', range: '15m' } },
   series: { name: '추이 차트', desc: '요청 수·상태코드·응답시간·전송량의 시간 흐름', def: { w: 2, h: 2, metric: 'requests', range: '1h' } },
@@ -219,10 +239,14 @@ const RENDER = {
 
   series(body, w, d) {
     const colors = w.metric === 'status' ? STATUS_CLASS.map((x) => x.color) : [C.s1, C.s2, C.s3, C.s4];
-    const series = (d.series || []).map((s, i) => ({ ...s, color: colors[i] }));
+    const isSt = w.metric === 'status';
+    const all = (d.series || []).map((s, i) => ({ ...s, color: colors[i], key: isSt ? (STATUS_CLASS[i] || {}).key : '' }));
+    const series = isSt ? all.filter((s) => !DASH_HIDE_ST.has(s.key)) : all;
     const box = h('div', { class: 'chart-box' });
-    fill(body, series.length > 1 ? legend(series.map((s) => ({ name: s.name, color: s.color, count: w.metric === 'status' ? s.values.reduce((a, b) => a + b, 0) : null }))) : null, box);
+    const counts = Object.fromEntries(all.map((s) => [s.key, s.values.reduce((a, b) => a + b, 0)]));
+    fill(body, isSt ? statusLegend(counts) : series.length > 1 ? legend(series.map((s) => ({ name: s.name, color: s.color }))) : null, box);
     if (!d.t || !d.t.length) { box.append(h('p', { class: 'muted' }, '데이터 없음')); return; }
+    if (!series.length) { box.append(h('p', { class: 'muted' }, '모든 상태코드를 숨겼습니다 — 위 범례를 눌러 다시 보이세요')); return; }
     box.append(timeChart(box, { t: d.t, series, stacked: w.metric === 'status', unit: d.unit, step: d.step }));
   },
 
@@ -231,7 +255,7 @@ const RENDER = {
     const counts = { s2: 0, s3: 0, s4: 0, s5: 0 };
     for (const p of pts) counts[p[2] >= 500 ? 's5' : p[2] >= 400 ? 's4' : p[2] >= 300 ? 's3' : 's2']++;
     const box = h('div', { class: 'chart-box scatter' });
-    fill(body, legend(STATUS_CLASS.map((s) => ({ ...s, count: counts[s.key] }))), box);
+    fill(body, statusLegend(counts), box);
     const W = Math.max(box.clientWidth, 200), Hh = Math.max(box.clientHeight, 90);
     const m = { l: 44, r: 10, t: 8, b: 20 };
     const iw = W - m.l - m.r, ih = Hh - m.t - m.b;
@@ -256,7 +280,7 @@ const RENDER = {
     for (const pass of [0, 1]) {
       for (const p of pts) {
         const err = p[2] >= 400;
-        if ((pass === 1) !== err) continue;
+        if ((pass === 1) !== err || !stShown(p[2])) continue;
         ctx.fillStyle = statusColor(p[2]);
         ctx.globalAlpha = err ? 0.95 : 0.7;
         ctx.beginPath();
@@ -266,7 +290,20 @@ const RENDER = {
     }
     const brush = h('div', { class: 'brush', hidden: true });
     const read = h('div', { class: 'dtip readout', hidden: true });
-    const layer = h('div', { class: 'scatter-layer', title: '드래그해서 요청을 골라 보세요' }, cv, svg, brush, read);
+    const ring = h('div', { class: 'sc-ring', hidden: true, 'aria-hidden': 'true' });
+    const layer = h('div', { class: 'scatter-layer', title: '드래그해서 요청을 골라 보세요' }, cv, svg, ring, brush, read);
+    // screen positions of the dots, for "which request is under the mouse"
+    const at = [];
+    pts.forEach((p, i) => { if (stShown(p[2])) at.push([x(p[0]), y(p[1]), p, i]); });
+    const nearest = (mx, my) => {
+      let best = null; let bd = 7 * 7; let near = 0;
+      for (const a of at) {
+        const dx = a[0] - mx, dy = a[1] - my, dd = dx * dx + dy * dy;
+        if (dd <= 7 * 7) near++;
+        if (dd <= bd) { bd = dd; best = a; }
+      }
+      return best ? { a: best, near } : null;
+    };
     box.append(layer);
     if (!pts.length) box.append(h('p', { class: 'muted overlay-note' }, '아직 요청이 없습니다'));
     const toData = (ev) => {
@@ -288,13 +325,27 @@ const RENDER = {
       brush.hidden = false;
       Object.assign(brush.style, { left: `${Math.min(start.px, p.px)}px`, top: `${Math.min(start.py, p.py)}px`, width: `${Math.abs(p.px - start.px)}px`, height: `${Math.abs(p.py - start.py)}px` });
     };
+    // only over a dot: that request's time, response time and status (empty space shows nothing)
+    const hide = () => { read.hidden = true; ring.hidden = true; };
     layer.addEventListener('mousemove', (ev) => {
-      const p = toData(ev);
+      if (start) { hide(); return; }
+      const r = layer.getBoundingClientRect();
+      const hit = nearest(ev.clientX - r.left, ev.clientY - r.top);
+      if (!hit) { hide(); return; }
+      const [px, py, p, i] = hit.a;
+      ring.hidden = false;
+      Object.assign(ring.style, { left: `${px}px`, top: `${py}px`, borderColor: statusColor(p[2]) });
       read.hidden = false;
-      read.textContent = `${hhmmss(p.t)} · ${fmtMs(p.ms)}`;
-      read.style.left = `${Math.min(p.px + 12, W - 130)}px`; read.style.top = `${Math.max(p.py - 30, 0)}px`;
+      const host = (d.hosts || [])[p[3]] || '';
+      const req = (d.reqs || [])[i] || '';
+      fill(read,
+        h('div', null, h('b', null, fmtMs(p[1])), ` · ${p[2]} · ${hhmmss(p[0])}`, hit.near > 1 ? h('span', { class: 'muted' }, ` (겹친 요청 ${hit.near}건)`) : null),
+        host ? h('div', { class: 'small' }, host) : null,
+        req ? h('div', { class: 'mono small ellipsis' }, req) : null,
+        h('div', { class: 'muted small' }, '누르면 상세'));
+      read.style.left = `${Math.max(0, Math.min(px + 12, W - 270))}px`; read.style.top = `${Math.max(py - 36, 0)}px`;
     });
-    layer.addEventListener('mouseleave', () => { read.hidden = true; });
+    layer.addEventListener('mouseleave', hide);
     function end(ev) {
       window.removeEventListener('mousemove', drag);
       if (!start) return;
@@ -302,10 +353,14 @@ const RENDER = {
       const s = start;
       start = null; DASH.hold = false; brush.hidden = true;
       const small = Math.abs(p.px - s.px) < 6 && Math.abs(p.py - s.py) < 6;
-      const q = small
-        ? { from: s.t - 15000, to: s.t + 15000, min: 0, max: 1e12 }
-        : { from: Math.min(s.t, p.t), to: Math.max(s.t, p.t), min: Math.min(s.ms, p.ms), max: Math.max(s.ms, p.ms) >= ymax * 0.98 ? 1e12 : Math.max(s.ms, p.ms) };
-      openRequests({ ...q, host: w.host || '', db: !!DASH.at });
+      const dot = small ? nearest(s.px, s.py) : null;
+      // a click on a dot: that request (same time and response time); elsewhere ±15 s; a drag: the box
+      const q = dot
+        ? { from: dot.a[2][0] - 1, to: dot.a[2][0] + 1, min: Math.max(0, dot.a[2][1] - 0.01), max: dot.a[2][1] + 0.01, host: (d.hosts || [])[dot.a[2][3]] || w.host || '' }
+        : small
+          ? { from: s.t - 15000, to: s.t + 15000, min: 0, max: 1e12 }
+          : { from: Math.min(s.t, p.t), to: Math.max(s.t, p.t), min: Math.min(s.ms, p.ms), max: Math.max(s.ms, p.ms) >= ymax * 0.98 ? 1e12 : Math.max(s.ms, p.ms) };
+      openRequests({ host: w.host || '', ...q, st: stParam(), db: !!DASH.at });
     }
   },
 
@@ -337,12 +392,13 @@ const RENDER = {
     const down = list.filter((s) => !s.ok).length;
     const cd = d.caddy && d.caddy.down;
     fill(body,
+      h('p', { class: 'small muted' }, '막대 하나 = 길목이 대상에 연결해 본 한 번 (왼쪽이 오래된 것, 1분마다 · 대시보드를 보는 동안 30초마다) — 초록 정상 · 노랑 500ms 넘음 · 빨강 응답 없음'),
       h('div', { class: 'row' }, cd ? statusPill('crit', `Caddy 중단 (${caddyStateText(d.caddy)}) — 모든 사이트 접속 불가`) : down ? statusPill('crit', `${down}개 응답 없음`) : statusPill('good', `${list.length}개 모두 정상`)),
       cd ? h('p', { class: 'small muted' }, '아래는 길목이 대상(upstream)에 직접 연결해 본 결과입니다. Caddy를 다시 시작해야 사이트에 접속됩니다.') : null,
       h('div', { class: 'hgrid' }, list.map((s) => {
         const tile = h('button', { type: 'button', class: `htile ${s.ok ? 'ok' : 'down'}`, title: `${s.fqdn}\n→ ${s.upstream}${s.err ? `\n${s.err}` : ''}` },
           h('div', { class: 'ht-top' }, h('span', { class: 'sdot', style: { background: s.ok ? C.good : C.crit } }), h('b', null, s.sub), h('span', { class: 'ht-ms' }, s.ok ? fmtMs(s.ms) : '응답 없음')),
-          h('div', { class: 'ht-hist', 'aria-hidden': 'true' }, (s.history || []).map((p) => h('i', { style: { background: p.ok ? (p.ms > 500 ? C.warn : C.good) : C.crit, opacity: p.ok ? 0.75 : 1 } }))));
+          h('div', { class: 'ht-hist', 'aria-hidden': 'true' }, (s.history || []).map((p) => h('i', { title: `${hhmmss(p.t)} · ${p.ok ? fmtMs(p.ms) : '응답 없음'}`, style: { background: p.ok ? (p.ms > 500 ? C.warn : C.good) : C.crit, opacity: p.ok ? 0.75 : 1 } }))));
         tile.addEventListener('click', () => { const svc = S.state.services.find((x) => x.id === s.id); if (svc) openServiceDrawer(svc); });
         return tile;
       })));
@@ -383,7 +439,8 @@ const RENDER = {
 // ======================================================================= drill-down
 
 async function openRequests(q) {
-  const params = new URLSearchParams({ from: Math.round(q.from), to: Math.round(q.to), min: q.min, max: q.max, host: q.host, db: q.db ? '1' : '0' });
+  const params = new URLSearchParams({ from: Math.round(q.from), to: Math.round(q.to), min: q.min, max: q.max, host: q.host, db: q.db ? '1' : '0', st: q.st || '' });
+  const stTxt = q.st ? STATUS_CLASS.filter((c) => q.st.split(',').includes(c.key[1])).map((c) => c.name).join('·') : '';
   const body = h('div', { class: 'stack' }, spinnerRow('요청을 찾는 중…'));
   const close = h('button', { type: 'button', class: 'btn primary' }, '닫기');
   const dlg = openDialog({ title: `요청 상세 · ${hhmmss(q.from)} ~ ${hhmmss(q.to)}`, body, footer: [close], size: 'wide' });
@@ -392,7 +449,7 @@ async function openRequests(q) {
     const r = await api('GET', `/api/dash/requests?${params}`);
     const list = r.requests || [];
     fill(body, 
-      h('p', { class: 'muted small' }, `${fmtNum(r.total)}건${q.max < 1e11 ? ` · 응답시간 ${fmtMs(q.min)} ~ ${fmtMs(q.max)}` : ''}${q.host ? ` · ${q.host}` : ''}${r.total > list.length ? ` · 느린 순 ${list.length}건만 표시` : ''}`),
+      h('p', { class: 'muted small' }, `${fmtNum(r.total)}건${q.max < 1e11 ? ` · 응답시간 ${fmtMs(q.min)} ~ ${fmtMs(q.max)}` : ''}${q.host ? ` · ${q.host}` : ''}${stTxt ? ` · ${stTxt}만` : ''}${r.total > list.length ? ` · 느린 순 ${list.length}건만 표시` : ''}`),
       list.length ? h('div', { class: 'table-wrap glass-inner' }, h('table', { class: 'compact' },
         h('thead', null, h('tr', null, ['시각', '사이트', '요청', '상태', '응답시간', '크기', '클라이언트'].map((t) => h('th', { scope: 'col' }, t)))),
         h('tbody', null, list.map((x) => h('tr', null,

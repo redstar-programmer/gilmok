@@ -152,12 +152,13 @@ func buildSeries(metric string, step int64, ts []int64, bs []Bucket) seriesOut {
 func (a *App) dbScatter(ctx context.Context, wd Widget, end time.Time) map[string]any {
 	from := end.Add(-wd.dur()).UnixMilli()
 	rows, _ := a.ldb.QueryRequests(ctx, ReqQuery{From: from, To: end.UnixMilli(), Host: wd.Host, Limit: 6000})
-	pts := make([][4]float64, 0, len(rows))
+	list := make([]ReqRec, 0, len(rows))
 	for i := len(rows) - 1; i >= 0; i-- {
-		r := rows[i]
-		pts = append(pts, [4]float64{float64(r.T), r.Ms, float64(r.Status), 0})
+		list = append(list, rows[i].ReqRec)
 	}
-	return map[string]any{"from": from, "to": end.UnixMilli(), "points": pts, "history": true}
+	out := scatterPoints(list)
+	out["from"], out["to"], out["history"] = from, end.UnixMilli(), true
+	return out
 }
 
 // TopRequests aggregates the request log in SQL (bounded by the time index).
