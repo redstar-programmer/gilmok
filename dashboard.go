@@ -50,7 +50,7 @@ var (
 	widgetTypes   = map[string]bool{"stat": true, "series": true, "scatter": true, "top": true, "health": true, "containers": true, "certs": true, "events": true}
 	statMetrics   = map[string]bool{"rpm": true, "requests": true, "err5xx": true, "err4xx": true, "avgMs": true, "p95Ms": true, "bytes": true, "waf": true, "csBans": true, "healthUp": true, "certDays": true}
 	seriesMetrics = map[string]bool{"requests": true, "status": true, "latency": true, "bytes": true, "waf": true}
-	topDims       = map[string]bool{"host": true, "path": true, "status": true, "client": true, "slow": true}
+	topDims       = map[string]bool{"host": true, "path": true, "status": true, "client": true, "country": true, "slow": true}
 	ranges        = map[string]time.Duration{"5m": 5 * time.Minute, "15m": 15 * time.Minute, "1h": time.Hour, "6h": 6 * time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour, "30d": 30 * 24 * time.Hour}
 )
 
@@ -317,6 +317,7 @@ func (a *App) scatterData(wd Widget) map[string]any {
 func scatterPoints(list []ReqRec) map[string]any {
 	pts := make([][4]float64, 0, len(list))
 	reqs := make([]string, 0, len(list))
+	who := make([][3]string, 0, len(list)) // ip, country, via
 	hosts := []string{}
 	hi := map[string]int{}
 	for _, r := range list {
@@ -332,8 +333,9 @@ func scatterPoints(list []ReqRec) map[string]any {
 			u = u[:120] + "…"
 		}
 		reqs = append(reqs, strings.TrimSpace(r.Method+" "+u))
+		who = append(who, [3]string{r.IP, r.CC, r.Via})
 	}
-	return map[string]any{"points": pts, "hosts": hosts, "reqs": reqs}
+	return map[string]any{"points": pts, "hosts": hosts, "reqs": reqs, "who": who}
 }
 
 // statusClasses: "2,4" → [2 4] (the dashboard's status filter); nil = all.
@@ -394,10 +396,15 @@ func (a *App) topData(wd Widget) map[string]any {
 		case "status":
 			k = strconv.Itoa(r.Status)
 		case "client":
-			if r.IP == "" {
-				continue // only mTLS sites carry a trustworthy client IP
+			if r.IP == "" || r.Via == "hidden" {
+				continue // Docker's gateway says nothing about the client
 			}
 			k = r.IP
+		case "country":
+			if r.CC == "" {
+				continue
+			}
+			k = r.CC
 		}
 		x := m[k]
 		if x == nil {

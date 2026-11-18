@@ -28,7 +28,20 @@ import (
 	"time"
 )
 
-const caddyDockerfile = `# 길목이 만든 파일입니다 (관리형 Caddy) — Cloudflare DNS + Coraza WAF(OWASP CRS)
+const caddyDockerfile = `# 길목이 만든 파일입니다 (관리형 Caddy) — Cloudflare DNS + Coraza WAF(OWASP CRS) + GeoIP 국가 차단
+FROM caddy:builder AS builder
+RUN xcaddy build \
+    --with github.com/caddy-dns/cloudflare \
+    --with github.com/corazawaf/coraza-caddy/v2 \
+    --with github.com/porech/caddy-maxmind-geolocation
+
+FROM caddy:latest
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+`
+
+// caddyDockerfileV1: what installs before 0.1.12 wrote (no GeoIP module). Left exactly like this, it
+// is replaced with caddyDockerfile on start; an edited file is never touched.
+const caddyDockerfileV1 = `# 길목이 만든 파일입니다 (관리형 Caddy) — Cloudflare DNS + Coraza WAF(OWASP CRS)
 FROM caddy:builder AS builder
 RUN xcaddy build \
     --with github.com/caddy-dns/cloudflare \
@@ -37,6 +50,23 @@ RUN xcaddy build \
 FROM caddy:latest
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
 `
+
+// upgradeManagedCaddyDockerfile: an untouched Dockerfile of an older version gets the new modules
+// (they arrive with the next image update — Caddy tab › image update).
+func (a *App) upgradeManagedCaddyDockerfile() {
+	rec := a.store.Snapshot().Stacks["caddy"]
+	if rec == nil {
+		return
+	}
+	p := filepath.Join(rec.Dir, "Dockerfile")
+	b, err := os.ReadFile(p)
+	if err != nil || strings.TrimSpace(strings.ReplaceAll(string(b), "\r\n", "\n")) != strings.TrimSpace(caddyDockerfileV1) {
+		return
+	}
+	if os.WriteFile(p, []byte(caddyDockerfile), 0o644) == nil {
+		a.logEvent("system", "info", "stack.dockerfile", rec.Container, "관리형 Caddy Dockerfile에 GeoIP 모듈을 추가했습니다 — Caddy 탭 › 이미지 업데이트로 다시 빌드하면 국가 차단을 쓸 수 있습니다", nil)
+	}
+}
 
 // Cloudflare's published IPv4 ranges (https://www.cloudflare.com/ips-v4)
 const cloudflareIPv4 = "173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22"

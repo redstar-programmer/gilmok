@@ -2409,10 +2409,11 @@ function renderCaddy(panel) {
         { id: 'listen', title: '포트', desc: privOn() ? `공개 사이트(:443)와 ${privName()} 사이트가 들어오는 포트입니다.` : '공개 사이트가 들어오는 포트(:443)입니다.', state: 'ok', stateText: privOn() ? `:443 / :${st.tailscalePort || 8443}` : ':443',
           body: listenForm },
       ] },
-      { id: 'protect', title: '보호 (기본 차단 · WAF)', desc: 'Caddy에서 공격 요청을 막습니다. 공통 규칙을 정하고, 사이트마다 켜고 끕니다.', children: [
+      { id: 'protect', title: '보호 (기본 차단 · WAF · 국가)', desc: 'Caddy에서 공격 요청과 허용하지 않은 국가를 막습니다. 공통 규칙을 정하고, 사이트마다 켜고 끕니다.', children: [
         { ...guardStep(), title: '기본 차단' },
         { ...wafEngineStep(), title: 'WAF 엔진' },
         { ...wafServicesStep(), title: '사이트별 적용' },
+        typeof geoBlockStep === 'function' ? geoBlockStep() : null,
       ] },
       { id: 'validate', title: '생성 결과 검증', desc: `기본 골격 + 서비스 ${sites.length}개로 만든 Caddyfile을 Caddy 컨테이너 안에서 검증합니다. 파일은 바꾸지 않습니다.`,
         state: S.validated.caddy ? (S.validated.caddy.ok ? 'ok' : 'fail') : 'todo', stateText: S.validated.caddy ? (S.validated.caddy.ok ? '검증 통과' : '검증 실패') : '',

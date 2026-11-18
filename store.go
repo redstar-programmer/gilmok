@@ -99,6 +99,13 @@ type Settings struct {
 	CfGeoBots      bool     `json:"cfGeoBots"`      // let verified bots (search engines) through
 	CfGeoHosts     []string `json:"cfGeoHosts"`     // service ids; empty = whole zone
 
+	// GeoIP (geoip.go): the country of each request, and the country block of sites that do not go
+	// through Cloudflare (Caddy module caddy-maxmind-geolocation; Proxied sites use the Cloudflare rule)
+	GeoIPOff     bool     `json:"geoipOff"`     // do not download the DB-IP country database
+	GeoMode      string   `json:"geoMode"`      // "" off | allow (only listed pass) | block (listed are refused)
+	GeoCountries string   `json:"geoCountries"` // ISO codes, e.g. "KR JP"
+	GeoHosts     []string `json:"geoHosts"`     // service ids; empty = every public site Caddy sees directly
+
 	CfAllowRule bool   `json:"cfAllowRule"` // trusted IPs skip the other custom rules
 	CfAllowIPs  string `json:"cfAllowIps"`  // IPs / CIDRs, one per line
 
@@ -227,6 +234,7 @@ type TopoHop struct {
 }
 
 type Data struct {
+	geoDB         string                   // runtime: the GeoIP database path inside Caddy, set when Caddy can use it
 	Settings      Settings                 `json:"settings"`
 	Services      []*Service               `json:"services"`
 	AdminHash     string                   `json:"adminHash,omitempty"` // before accounts (migrated to Accounts)

@@ -47,7 +47,9 @@ type ReqRec struct {
 	Status int     `json:"status"`
 	Ms     float64 `json:"ms"`
 	Size   int64   `json:"size"`
-	IP     string  `json:"ip,omitempty"` // real client IP (mTLS sites only)
+	IP     string  `json:"ip,omitempty"`  // client address (see Via)
+	CC     string  `json:"cc,omitempty"`  // country (ISO), from Cloudflare or the GeoIP database
+	Via    string  `json:"via,omitempty"` // cf (Cloudflare's header) | direct (public address Caddy saw) | lan | tailnet | hidden (Docker's gateway: unknown)
 }
 
 type Bucket struct {
@@ -435,11 +437,14 @@ type accessLine struct {
 		Method   string `json:"method"`
 		URI      string `json:"uri"`
 		ClientIP string `json:"client_ip"`
+		RemoteIP string `json:"remote_ip"`
 	} `json:"request"`
 	Status   int     `json:"status"`
 	Duration float64 `json:"duration"`
 	Size     int64   `json:"size"`
 	RealIP   string  `json:"gm_real_ip"`
+	CFIP     string  `json:"gm_cf_ip"`
+	CFCC     string  `json:"gm_cf_cc"`
 }
 
 func parseAccessLine(line string) (ReqRec, bool) {
@@ -458,10 +463,44 @@ func parseAccessLine(line string) (ReqRec, bool) {
 	if len(uri) > 300 {
 		uri = uri[:300] + "…"
 	}
-	return ReqRec{
+	r := ReqRec{
 		T: int64(e.Ts * 1000), Host: strings.ToLower(host), Method: e.Request.Method, URI: uri,
-		Status: e.Status, Ms: math.Round(e.Duration*1e5) / 100, Size: e.Size, IP: e.RealIP,
-	}, true
+		Status: e.Status, Ms: math.Round(e.Duration*1e5) / 100, Size: e.Size,
+	}
+	r.IP, r.CC, r.Via = clientOf(e)
+	return r, true
+}
+
+// clientOf: who sent the request. Proxied sites: Cloudflare's headers (country included); others:
+// the address Caddy saw — real on Linux / native installs, Docker's gateway on Docker Desktop
+// (Windows / macOS), which says nothing about the client.
+func clientOf(e accessLine) (ip, cc, via string) {
+	cc = strings.ToUpper(strings.TrimSpace(e.CFCC))
+	if cc == "XX" || cc == "T1" || len(cc) != 2 { // Cloudflare: unknown / Tor
+		cc = ""
+	}
+	for _, v := range []string{e.RealIP, e.CFIP} {
+		if net.ParseIP(strings.TrimSpace(v)) != nil {
+			return strings.TrimSpace(v), cc, "cf"
+		}
+	}
+	ip = e.Request.ClientIP
+	if ip == "" {
+		ip = e.Request.RemoteIP
+	}
+	addr := net.ParseIP(ip)
+	switch {
+	case addr == nil:
+		return "", "", ""
+	case globalIP(addr):
+		return ip, "", "direct"
+	case addr.To4() != nil && addr.To4()[0] == 100 && addr.To4()[1]&0xc0 == 64:
+		return ip, "", "tailnet"
+	case addr.To4() != nil && addr.To4()[0] == 172 && addr.To4()[1]&0xf0 == 16:
+		return ip, "", "hidden" // Docker's networks (172.16/12): Docker Desktop hides the client
+	default:
+		return ip, "", "lan"
+	}
 }
 
 func (a *App) logStreamLoop() {
@@ -513,6 +552,9 @@ func (a *App) logStreamLoop() {
 			for sc.Scan() {
 				line := sc.Text()
 				if r, ok := parseAccessLine(line); ok {
+					if r.CC == "" && r.Via == "direct" {
+						r.CC = a.geoCountry(r.IP)
+					}
 					if r.T > last {
 						a.mon.addReq(r)
 						a.ldb.Req(r)

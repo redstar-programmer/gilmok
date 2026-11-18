@@ -215,7 +215,7 @@ func parseSite(b caddyBlock, st Settings) (*Service, []string) {
 		}
 		return stripComment(strings.TrimSpace(b.body[i]))
 	}
-	isRealIP := func(c string) bool { return strings.HasPrefix(c, "log_append "+realIPField+" ") }
+	isRealIP := func(c string) bool { return strings.HasPrefix(c, "log_append gm_") } // generated access-log fields
 	for i, raw := range b.body {
 		line := dedent(raw)
 		trim := strings.TrimSpace(raw)
@@ -231,6 +231,8 @@ func parseSite(b caddyBlock, st Settings) (*Service, []string) {
 			case code == "import "+snippetGuard:
 				s.Guard = true
 				continue
+			case code == "import "+snippetGeo:
+				continue // generated: country block (a setting, not per service)
 			case strings.HasPrefix(code, "request_header "+proxyHeader+" "):
 				continue // generated: Gilmok proxy secret
 			case code == "log" && commentOf(trim) == "gilmok":
@@ -316,6 +318,14 @@ func GenerateCaddyfile(d Data) string {
 		}
 		if cs {
 			sb.WriteString("\tlog_append " + realIPField + " {http.request.header.Cf-Connecting-Ip}\n")
+		}
+		if (cs || st.DashLogs) && st.UseCloudflare && s.Exposure == ExposurePublic && s.Proxied {
+			// who and from where (dashboard / logs): Cloudflare's client address and country
+			sb.WriteString("\tlog_append " + cfIPField + " {http.request.header.Cf-Connecting-Ip}\n")
+			sb.WriteString("\tlog_append " + cfCountryField + " {http.request.header.Cf-Ipcountry}\n")
+		}
+		if geoTarget(d, s) && geoActive(d) {
+			sb.WriteString("\timport " + snippetGeo + "\n")
 		}
 		if s.Guard && guardActive(d) {
 			sb.WriteString("\timport " + snippetGuard + "\n")

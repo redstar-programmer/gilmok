@@ -153,7 +153,7 @@ function logViewer() {
     h('thead', null, h('tr', { class: 'lt-head' })), tbody));
   const head = () => {
     table.querySelector('.lt-head').replaceChildren(...(LOGS.cat === 'requests'
-      ? ['시각', '사이트', '요청', '상태', '응답시간', '크기', '클라이언트']
+      ? ['시각', '사이트', '요청', '상태', '응답시간', '크기', '접속자 (IP · 국가)']
       : ['시각', '수준', '작업', '대상', '내용', '행위자', 'IP']).map((t) => h('th', { scope: 'col' }, t)));
   };
   catNav.addEventListener('change', (e) => { LOGS.cat = e.target.value; head(); run(true); });
@@ -198,7 +198,7 @@ function reqRow(x) {
     h('td', { class: 'nowrap' }, fmtTimeSec(x.t)), h('td', null, x.host),
     h('td', { class: 'mono ellipsis wide', title: `${x.method} ${x.uri}` }, `${x.method} ${x.uri}`),
     h('td', null, h('span', { class: 'sdot', style: { background: statusColor(x.status) } }), String(x.status)),
-    h('td', null, fmtMs(x.ms)), h('td', null, fmtBytes(x.size)), h('td', { class: 'mono' }, x.ip || '—'))];
+    h('td', null, fmtMs(x.ms)), h('td', null, fmtBytes(x.size)), h('td', null, clientCell(x)))];
 }
 
 const fmtTimeSec = (ms) => new Date(ms).toLocaleString(gmLocale(), { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });

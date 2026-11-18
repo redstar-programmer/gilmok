@@ -70,7 +70,7 @@ const STAT_METRICS = [
 const LOWER_IS_BAD = new Set(['certDays']);
 const NO_RANGE_STATS = new Set(['rpm', 'csBans', 'healthUp', 'certDays']);
 const SERIES_METRICS = [['requests', '요청 수'], ['status', '상태코드별 요청'], ['latency', '응답시간 (평균·p95)'], ['bytes', '전송량'], ['waf', 'WAF 차단']];
-const TOP_DIMS = [['host', '사이트'], ['path', '경로'], ['status', '상태코드'], ['client', '클라이언트 IP (mTLS 사이트만)'], ['slow', '느린 요청']];
+const TOP_DIMS = [['host', '사이트'], ['path', '경로'], ['status', '상태코드'], ['client', '접속자 IP'], ['country', '접속 국가'], ['slow', '느린 요청']];
 const RANGES = [['5m', '5분'], ['15m', '15분'], ['1h', '1시간'], ['6h', '6시간'], ['24h', '24시간'], ['7d', '7일'], ['30d', '30일']];
 const rangeName = (r) => (RANGES.find((x) => x[0] === r) || [r, r])[1];
 
@@ -342,6 +342,7 @@ const RENDER = {
         h('div', null, h('b', null, fmtMs(p[1])), ` · ${p[2]} · ${hhmmss(p[0])}`, hit.near > 1 ? h('span', { class: 'muted' }, ` (겹친 요청 ${hit.near}건)`) : null),
         host ? h('div', { class: 'small' }, host) : null,
         req ? h('div', { class: 'mono small ellipsis' }, req) : null,
+        (d.who || [])[i] ? h('div', { class: 'small' }, clientText({ ip: d.who[i][0], cc: d.who[i][1], via: d.who[i][2] })) : null,
         h('div', { class: 'muted small' }, '누르면 상세'));
       read.style.left = `${Math.max(0, Math.min(px + 12, W - 270))}px`; read.style.top = `${Math.max(py - 36, 0)}px`;
     });
@@ -378,11 +379,11 @@ const RENDER = {
     fill(body, 
       rows.length ? h('ol', { class: 'dlist bars' }, rows.map((r) => h('li', null,
         h('div', { class: 'dl-top' },
-          h('span', { class: `dl-main ${w.dim === 'host' ? '' : 'mono'}`, title: r.key }, w.dim === 'status' ? h('span', null, h('span', { class: 'sdot', style: { background: statusColor(+r.key) } }), r.key) : r.key),
+          h('span', { class: `dl-main ${w.dim === 'host' ? '' : 'mono'}`, title: r.key }, w.dim === 'status' ? h('span', null, h('span', { class: 'sdot', style: { background: statusColor(+r.key) } }), r.key) : w.dim === 'country' ? h('span', null, h('span', { class: 'cc-badge' }, r.key), ` ${geoName(r.key)}`) : r.key),
           h('b', { class: 'dl-num' }, fmtNum(r.n))),
         h('div', { class: 'dl-bar' }, h('i', { style: { width: `${(r.n / max) * 100}%` } })),
         h('div', { class: 'dl-sub' }, `평균 ${fmtMs(r.avgMs)}`, r.errPct ? h('span', { class: 'errtxt' }, ` · 5xx ${r.errPct}%`) : null))))
-        : h('p', { class: 'muted' }, w.dim === 'client' ? '실제 IP는 mTLS 사이트 + CrowdSec 수집을 켠 경우에만 기록됩니다' : '요청 없음'),
+        : h('p', { class: 'muted' }, w.dim === 'client' || w.dim === 'country' ? '아직 접속자 주소가 기록된 요청이 없습니다 — Docker Desktop에서는 Proxied 사이트(Cloudflare 경유)의 요청만 접속자를 알 수 있습니다' : '요청 없음'),
       d.partial ? h('p', { class: 'hint' }, '최근 요청 2만 건 기준') : null);
   },
 
@@ -454,12 +455,12 @@ async function openRequests(q) {
     fill(body, 
       h('p', { class: 'muted small' }, `${fmtNum(r.total)}건${q.max < 1e11 ? ` · 응답시간 ${fmtMs(q.min)} ~ ${fmtMs(q.max)}` : ''}${q.host ? ` · ${q.host}` : ''}${stTxt ? ` · ${stTxt}만` : ''}${r.total > list.length ? ` · 느린 순 ${list.length}건만 표시` : ''}`),
       list.length ? h('div', { class: 'table-wrap glass-inner' }, h('table', { class: 'compact' },
-        h('thead', null, h('tr', null, ['시각', '사이트', '요청', '상태', '응답시간', '크기', '클라이언트'].map((t) => h('th', { scope: 'col' }, t)))),
+        h('thead', null, h('tr', null, ['시각', '사이트', '요청', '상태', '응답시간', '크기', '접속자 (IP · 국가)'].map((t) => h('th', { scope: 'col' }, t)))),
         h('tbody', null, list.map((x) => h('tr', null,
           h('td', null, hhmmss(x.t)), h('td', null, x.host),
           h('td', { class: 'mono ellipsis', title: x.uri }, `${x.method} ${x.uri}`),
           h('td', null, h('span', { class: 'sdot', style: { background: statusColor(x.status) } }), String(x.status)),
-          h('td', null, h('b', null, fmtMs(x.ms))), h('td', null, fmtBytes(x.size)), h('td', { class: 'mono' }, x.ip || '—')))))) : h('p', { class: 'muted' }, '선택한 영역에 요청이 없습니다.'));
+          h('td', null, h('b', null, fmtMs(x.ms))), h('td', null, fmtBytes(x.size)), h('td', null, clientCell(x))))))) : h('p', { class: 'muted' }, '선택한 영역에 요청이 없습니다.'));
   } catch (ex) { fill(body, errorBox(ex.message)); }
 }
 

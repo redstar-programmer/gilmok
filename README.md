@@ -45,8 +45,10 @@ DNS 레코드 생성·수정·삭제, Proxied 전환, DDNS(IPv4·IPv6)를 처리
 ### WAF와 CrowdSec
 Caddy 앞단에서 알려진 스캐너, 공격 도구, `/.env` 같은 탐색 경로를 403으로 막습니다. 여기에 Coraza WAF(OWASP CRS)를 서비스별로 「탐지만」 또는 「차단」으로 켤 수 있습니다. CrowdSec은 Cloudflare를 거쳐 들어온 요청의 실제 IP로 공격을 판정하고, 차단은 Cloudflare 엣지에서 합니다.
 
+Cloudflare를 거치지 않는 공개 사이트는 Caddy에서 접속자 국가로 막을 수 있습니다(허용 국가만 들어옴 / 지정 국가 차단). 내부망·Tailscale 주소는 막지 않습니다.
+
 ### 대시보드와 로그
-분당 요청 수, 5xx 비율, 응답시간 p95, 상태코드별 추이, 서비스 응답 여부, 컨테이너 자원, 인증서 만료일을 위젯으로 봅니다. 누가 무엇을 바꿨는지 남는 감사 로그와 보안·시스템 로그는 SQLite에 저장되고, 디스크 여유가 줄면 기록을 줄입니다.
+분당 요청 수, 5xx 비율, 응답시간 p95, 상태코드별 추이, 서비스 응답 여부, 컨테이너 자원, 인증서 만료일, 접속자 IP·국가 순위를 위젯으로 봅니다. 요청마다 접속자 IP와 국가가 남습니다(Proxied 사이트는 Cloudflare가 알려 준 값, 그 밖에는 길목이 받는 무료 국가 DB로 판정). 누가 무엇을 바꿨는지 남는 감사 로그와 보안·시스템 로그는 SQLite에 저장되고, 디스크 여유가 줄면 기록을 줄입니다.
 
 ### 없는 구성요소 설치
 Caddy, Authelia, CrowdSec이 아직 없다면 길목이 옆 컨테이너로 설치하고 연결 설정까지 맞춥니다. 설치한 뒤에도 compose 파일을 화면에서 고칠 수 있습니다.
@@ -131,7 +133,7 @@ docker compose pull
 docker compose up -d
 ```
 
-설정과 로그는 `./data`에 남아 있습니다. 버전을 고정하려면 compose 파일의 이미지를 `vitive/gilmok:0.1.11`처럼 바꾸세요.
+설정과 로그는 `./data`에 남아 있습니다. 버전을 고정하려면 compose 파일의 이미지를 `vitive/gilmok:0.1.12`처럼 바꾸세요.
 
 ## 환경변수
 
@@ -158,7 +160,7 @@ Cloudflare 토큰에는 `Zone · Zone · Read`와 `Zone · DNS · Edit` 권한�
 
 ## 알아 둘 점
 
-> **Docker Desktop(Windows, macOS)에서는 접속자 IP가 전부 게이트웨이 IP로 보입니다.** 그래서 서버 안에서 IP로 판단하는 기능(GeoIP, fail2ban 등)은 쓸 수 없고, 길목은 IP 기반 차단을 Cloudflare 엣지에서 합니다. CrowdSec도 Cloudflare만 접속할 수 있는 mTLS 사이트의 로그에서만 실제 IP를 믿습니다.
+> **Docker Desktop(Windows, macOS)에서는 접속자 IP가 전부 게이트웨이 IP로 보입니다.** 그래서 서버 안에서 IP로 판단하는 기능(fail2ban 등)은 쓸 수 없고, 길목은 IP 기반 차단을 Cloudflare 엣지에서 합니다. Caddy 국가 차단도 이 환경에서는 아무것도 막지 않으며(내부 주소는 막지 않음), DNS only 사이트의 접속자는 「알 수 없음」으로 기록됩니다. Proxied 사이트는 Cloudflare가 알려 준 접속자 IP·국가가 기록됩니다. CrowdSec도 Cloudflare만 접속할 수 있는 mTLS 사이트의 로그에서만 실제 IP를 믿습니다.
 
 > 지금은 **Caddy만** 지원합니다. nginx는 다음 계획에 있습니다.
 
@@ -181,6 +183,8 @@ docker compose -f dev/docker-compose.yml up -d --build    # http://127.0.0.1:180
 ## 라이선스
 
 MIT 라이선스입니다. 자세한 내용은 [LICENSE](LICENSE)를 보세요.
+
+국가 판정에는 [DB-IP](https://db-ip.com)의 IP to Country Lite 데이터(CC BY 4.0)를 씁니다. 길목이 실행 중에 받으며 저장소와 이미지에는 들어 있지 않습니다. IP Geolocation by DB-IP.
 
 ## 문의
 

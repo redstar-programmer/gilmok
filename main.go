@@ -27,7 +27,7 @@ import (
 //go:embed web
 var webFS embed.FS
 
-var version = "0.1.11"
+var version = "0.1.12"
 
 func main() {
 	dataDir := env("GM_DATA", "/data")
@@ -49,11 +49,13 @@ func main() {
 	app.seedGroups() // groups already used by services / users become the registered list (once)
 	app.inferComponents()
 	app.fixManagedCaddyACME() // installs made without a token by older versions
+	app.upgradeManagedCaddyDockerfile()
 	app.logEvent("system", "info", "gilmok.start", "", "길목 시작 v"+version, nil)
 	app.cs.kick = make(chan struct{}, 1)
 	app.mon = newMonitor()
 	go app.monitorLoop()
 	go app.rejoinLoop() // an update recreated Gilmok: back onto its managed stacks' networks
+	go app.geoipLoop()
 	go app.diskGuardLoop()
 	go app.metricsFlushLoop()
 	go app.autheliaStreamLoop()
@@ -165,6 +167,8 @@ func (app *App) handler() http.Handler {
 	api.HandleFunc("DELETE /api/roles/{id}", S(auth.deleteRole))
 	api.HandleFunc("GET /api/waf/events", app.getWAFEvents)
 	api.HandleFunc("GET /api/waf/meta", app.getWAFMeta)
+	api.HandleFunc("GET /api/geoip", app.getGeoIP)
+	api.HandleFunc("POST /api/geoip/update", app.postGeoIPUpdate)
 	api.HandleFunc("POST /api/waf/test", app.postWAFTest)
 	api.HandleFunc("GET /api/cfwaf/events", app.getCFEvents)
 	api.HandleFunc("GET /api/topology", app.getTopology)
@@ -426,7 +430,9 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 		after := *d
 		after.Settings = in
 		changes := []string{}
-		if GenerateCaddyfile(*d) != GenerateCaddyfile(after) {
+		cur := *d
+		cur.geoDB, after.geoDB = "/geoip", "/geoip" // as if Caddy were ready: geo settings count as changes
+		if GenerateCaddyfile(cur) != GenerateCaddyfile(after) {
 			changes = append(changes, "Caddy 설정 변경")
 		}
 		if GenerateAccessControl(*d) != GenerateAccessControl(after) {
@@ -1057,6 +1063,20 @@ func normalizeSettings(p *Settings) error {
 	}
 	if in.CfGeoMode != "block" {
 		in.CfGeoMode = "allow"
+	}
+	// Caddy country block (DNS only sites): "" off | allow | block, with at least one country when on
+	cc, err := parseCountries(in.GeoCountries)
+	if err != nil {
+		return err
+	}
+	in.GeoCountries = strings.Join(cc, " ")
+	switch in.GeoMode {
+	case "", "allow", "block":
+	default:
+		return fmt.Errorf("국가 차단 방식이 올바르지 않습니다: %s", in.GeoMode)
+	}
+	if in.GeoMode != "" && len(cc) == 0 {
+		return errors.New("국가 차단을 켜려면 국가를 하나 이상 넣으세요 (예: KR)")
 	}
 	in.CfThreatAction = cfAction(in.CfThreatAction, "block")
 	in.CfCustomAction = cfAction(in.CfCustomAction, "managed_challenge")

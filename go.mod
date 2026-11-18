@@ -3,8 +3,11 @@ module gilmok
 go 1.26.0
 
 require (
+	github.com/oschwald/maxminddb-golang v1.13.1
 	golang.org/x/crypto v0.31.0
 	gopkg.in/yaml.v3 v3.0.1
+	modernc.org/sqlite v1.61.1
+	rsc.io/qr v0.2.0
 )
 
 require (
@@ -17,6 +20,4 @@ require (
 	modernc.org/libc v1.79.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
-	modernc.org/sqlite v1.61.1 // indirect
-	rsc.io/qr v0.2.0 // indirect
 )

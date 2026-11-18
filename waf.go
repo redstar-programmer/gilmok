@@ -28,6 +28,8 @@ const (
 	snippetWAFBlock  = "gm_waf_block"
 	snippetWAFDetect = "gm_waf_detect"
 	realIPField      = "gm_real_ip" // access-log field with Cf-Connecting-Ip (mTLS sites only)
+	cfIPField        = "gm_cf_ip"   // Cf-Connecting-Ip of Proxied sites (who; display only — CrowdSec uses gm_real_ip)
+	cfCountryField   = "gm_cf_cc"   // Cf-Ipcountry of Proxied sites
 	wafModule        = "http.handlers.waf"
 )
 
@@ -210,6 +212,9 @@ func wafSnippet(name, mode string, st Settings, svc *Service) string {
 func managedSnippets(d Data) string {
 	var parts []string
 	if g := guardSnippet(d); g != "" {
+		parts = append(parts, g)
+	}
+	if g := geoSnippet(d); g != "" {
 		parts = append(parts, g)
 	}
 	used := map[string]bool{}

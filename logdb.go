@@ -137,6 +137,15 @@ func openLogDB(path string) (*LogDB, error) {
 			return nil, fmt.Errorf("log db schema: %w", err)
 		}
 	}
+	// added later: country and where the client address comes from (older databases get the columns)
+	for _, col := range []string{"cc", "via"} {
+		var n int
+		if err := w.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('requests') WHERE name=?`, col).Scan(&n); err == nil && n == 0 {
+			if _, err := w.Exec(`ALTER TABLE requests ADD COLUMN ` + col + ` TEXT`); err != nil {
+				return nil, fmt.Errorf("log db schema (%s): %w", col, err)
+			}
+		}
+	}
 	r, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)&_pragma=query_only(1)")
 	if err != nil {
 		return nil, err
@@ -283,13 +292,13 @@ func (l *LogDB) writeBatch(reqs []ReqRec, mets []metricRow, evs []Event) error {
 	}
 	defer tx.Rollback()
 	if len(reqs) > 0 {
-		st, err := tx.PrepareContext(ctx, `INSERT INTO requests(ts,host,method,uri,status,ms,size,ip) VALUES(?,?,?,?,?,?,?,?)`)
+		st, err := tx.PrepareContext(ctx, `INSERT INTO requests(ts,host,method,uri,status,ms,size,ip,cc,via) VALUES(?,?,?,?,?,?,?,?,?,?)`)
 		if err != nil {
 			return err
 		}
 		defer st.Close() // also on an early error return
 		for _, r := range reqs {
-			if _, err := st.ExecContext(ctx, r.T, r.Host, r.Method, r.URI, r.Status, r.Ms, r.Size, r.IP); err != nil {
+			if _, err := st.ExecContext(ctx, r.T, r.Host, r.Method, r.URI, r.Status, r.Ms, r.Size, r.IP, r.CC, r.Via); err != nil {
 				return err
 			}
 		}
@@ -548,7 +557,7 @@ func (l *LogDB) QueryRequests(ctx context.Context, q ReqQuery) ([]ReqRow, error)
 	if q.SlowFirst {
 		order = "ms DESC"
 	}
-	rows, err := l.r.QueryContext(ctx, `SELECT id,ts,host,IFNULL(method,''),IFNULL(uri,''),status,ms,size,IFNULL(ip,'') FROM requests WHERE `+strings.Join(conds, " AND ")+` ORDER BY `+order+` LIMIT ?`, append(args, q.Limit)...)
+	rows, err := l.r.QueryContext(ctx, `SELECT id,ts,host,IFNULL(method,''),IFNULL(uri,''),status,ms,size,IFNULL(ip,''),IFNULL(cc,''),IFNULL(via,'') FROM requests WHERE `+strings.Join(conds, " AND ")+` ORDER BY `+order+` LIMIT ?`, append(args, q.Limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -556,7 +565,7 @@ func (l *LogDB) QueryRequests(ctx context.Context, q ReqQuery) ([]ReqRow, error)
 	out := []ReqRow{}
 	for rows.Next() {
 		var x ReqRow
-		if err := rows.Scan(&x.ID, &x.T, &x.Host, &x.Method, &x.URI, &x.Status, &x.Ms, &x.Size, &x.IP); err != nil {
+		if err := rows.Scan(&x.ID, &x.T, &x.Host, &x.Method, &x.URI, &x.Status, &x.Ms, &x.Size, &x.IP, &x.CC, &x.Via); err != nil {
 			return nil, err
 		}
 		out = append(out, x)

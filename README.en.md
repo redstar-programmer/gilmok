@@ -45,8 +45,10 @@ Creates, updates and deletes DNS records, switches Proxied on and off, and runs 
 ### WAF and CrowdSec
 Known scanners, attack tools and probe paths like `/.env` get a 403 right at the front of Caddy. On top of that, Coraza WAF (OWASP CRS) can be set to "detect only" or "block" per service. CrowdSec judges attacks by the real IP of requests that came through Cloudflare, and the block happens at the Cloudflare edge.
 
+Public sites that do not go through Cloudflare can be blocked by the visitor's country in Caddy (only listed countries / block listed countries). LAN and Tailscale addresses are never blocked.
+
 ### Dashboard and logs
-Requests per minute, 5xx rate, p95 response time, status codes over time, whether each service responds, container resources and certificate expiry, all as widgets. An audit log of who changed what, plus security and system logs, is kept in SQLite and recording is cut back when disk space runs low.
+Requests per minute, 5xx rate, p95 response time, status codes over time, whether each service responds, container resources, certificate expiry and top client IPs and countries, all as widgets. Every request records the client IP and country (from Cloudflare on Proxied sites, otherwise from a free country database Gilmok downloads). An audit log of who changed what, plus security and system logs, is kept in SQLite and recording is cut back when disk space runs low.
 
 ### Install what's missing
 No Caddy, Authelia or CrowdSec yet? Gilmok installs them as sibling containers and wires up the connection settings. You can still edit their compose files from the UI afterwards.
@@ -131,7 +133,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Settings and logs stay in `./data`. To pin a version, change the image in the compose file to something like `vitive/gilmok:0.1.11`.
+Settings and logs stay in `./data`. To pin a version, change the image in the compose file to something like `vitive/gilmok:0.1.12`.
 
 ## Environment variables
 
@@ -158,7 +160,7 @@ The Cloudflare token needs `Zone · Zone · Read` and `Zone · DNS · Edit`. Add
 
 ## Good to know
 
-> **On Docker Desktop (Windows, macOS) every visitor shows up with the gateway IP.** IP-based features inside the server (GeoIP, fail2ban and so on) can't work there, so Gilmok does IP-based blocking at the Cloudflare edge. CrowdSec only trusts the real IP in logs of mTLS sites, which nothing but Cloudflare can reach.
+> **On Docker Desktop (Windows, macOS) every visitor shows up with the gateway IP.** IP-based features inside the server (fail2ban and so on) can't work there, so Gilmok does IP-based blocking at the Cloudflare edge. The Caddy country block blocks nothing there either (internal addresses are never blocked), and visitors of DNS only sites are recorded as "unknown". Proxied sites record the client IP and country Cloudflare reports. CrowdSec only trusts the real IP in logs of mTLS sites, which nothing but Cloudflare can reach.
 
 > Only **Caddy** is supported for now. nginx is next on the list.
 
@@ -181,6 +183,8 @@ Pushing a tag like `v0.1.2` makes GitHub Actions run the tests and publish the D
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+Country lookups use the [DB-IP](https://db-ip.com) IP to Country Lite data (CC BY 4.0). Gilmok downloads it at run time; it is not part of the repository or the image. IP Geolocation by DB-IP.
 
 ## Support
 

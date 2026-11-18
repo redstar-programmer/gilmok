@@ -164,10 +164,11 @@ func (a *App) dbScatter(ctx context.Context, wd Widget, end time.Time) map[strin
 // TopRequests aggregates the request log in SQL (bounded by the time index).
 func (l *LogDB) TopRequests(ctx context.Context, dim string, from, to int64, host string, limit int) ([]topRow, error) {
 	key := map[string]string{
-		"host":   "host",
-		"status": "CAST(status AS TEXT)",
-		"client": "ip",
-		"path":   "CASE WHEN instr(uri,'?')>0 THEN substr(uri,1,instr(uri,'?')-1) ELSE uri END",
+		"host":    "host",
+		"status":  "CAST(status AS TEXT)",
+		"client":  "ip",
+		"country": "cc",
+		"path":    "CASE WHEN instr(uri,'?')>0 THEN substr(uri,1,instr(uri,'?')-1) ELSE uri END",
 	}[dim]
 	if key == "" {
 		return nil, fmt.Errorf("unknown dim")
@@ -180,7 +181,10 @@ func (l *LogDB) TopRequests(ctx context.Context, dim string, from, to int64, hos
 		conds, args = append(conds, "host=?"), append(args, host)
 	}
 	if dim == "client" {
-		conds = append(conds, "ip<>''")
+		conds = append(conds, "ip<>''", "IFNULL(via,'')<>'hidden'")
+	}
+	if dim == "country" {
+		conds = append(conds, "IFNULL(cc,'')<>''")
 	}
 	rows, err := l.r.QueryContext(ctx, `SELECT `+key+` AS k, COUNT(*), AVG(ms), SUM(status>=500) FROM requests WHERE `+strings.Join(conds, " AND ")+` GROUP BY k ORDER BY 2 DESC LIMIT ?`, append(args, limit)...)
 	if err != nil {

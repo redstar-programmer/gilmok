@@ -86,14 +86,14 @@ func (a *App) getLogExport(w http.ResponseWriter, r *http.Request) {
 	if cat == "requests" {
 		q := reqQueryFrom(r)
 		q.Limit = 5000
-		_ = cw.Write([]string{"time", "host", "method", "uri", "status", "ms", "size", "client_ip"})
+		_ = cw.Write([]string{"time", "host", "method", "uri", "status", "ms", "size", "client_ip", "country", "client_via"})
 		for total < 100000 {
 			rows, err := a.ldb.QueryRequests(ctx, q)
 			if err != nil || len(rows) == 0 {
 				break
 			}
 			for _, x := range rows {
-				_ = cw.Write(csvSafe(time.UnixMilli(x.T).Format(time.RFC3339), x.Host, x.Method, x.URI, strconv.Itoa(x.Status), strconv.FormatFloat(x.Ms, 'f', 2, 64), strconv.FormatInt(x.Size, 10), x.IP))
+				_ = cw.Write(csvSafe(time.UnixMilli(x.T).Format(time.RFC3339), x.Host, x.Method, x.URI, strconv.Itoa(x.Status), strconv.FormatFloat(x.Ms, 'f', 2, 64), strconv.FormatInt(x.Size, 10), x.IP, x.CC, x.Via))
 			}
 			total += len(rows)
 			q.Before = rows[len(rows)-1].ID

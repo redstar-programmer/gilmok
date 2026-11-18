@@ -780,8 +780,11 @@ go test -count=1 -run 'Groups|Bulk' ./...   # 일부
 | FRESH-26 | 대시보드 구성요소 상태 | 관리형 컨테이너 실행 중 / 멈춤 / 재시작 반복 / 없음 | 상태·재시작 횟수·원인 줄, 로그 API | P1 | ✅ `TestFreshStackStatusForDashboard` · 실제 Docker: 멈춤→시작, 삭제→다시 설치(같은 이름·네트워크), 깨진 Caddyfile 재시작 반복(원인 표시)→다시 설치, 화면 「시작」 버튼 (2026-11-17) |
 | FRESH-27 | Caddy 중단 시 서비스 상태 | Caddy 컨테이너 멈춤·없음 / 실행 중 / Caddy 미사용 | `/api/health`의 `caddy.down` → 목록·구성도·대시보드에 「Caddy 중단」(대상 응답은 툴팁) | P1 | ✅ `TestFreshHealthKnowsCaddyDown` · 화면 확인 (2026-11-17) |
 | FRESH-28 | 업데이트 뒤 네트워크 재연결 | 길목 컨테이너가 새로 만들어져 설치 때 붙은 네트워크가 빠짐 / 이미 붙어 있음 / 길목이 호스트에서 실행 | 시작 때 관리형 구성요소의 네트워크에 다시 연결(시스템 이벤트), 할 일 없으면 그대로, 호스트 실행이면 건드리지 않음 | P1 | ✅ `TestFreshRejoinStackNetworks` |
-| E2E-01~22 | 실제 처음 설치 | 실제 Docker: 언어 → 관리자 → Caddy(네트워크 지정·내부 인증서) → Authelia(네트워크 비움) → CrowdSec → 서비스 → 점검 → 적용 → 실제 접속 → CrowdSec 재시작 → 보류 | 전부 통과 | P1 | ✅ 24/24 (2026-11-11, 실제 Docker) |
-| E2E-P2-01~14 | 예전 Caddyfile → 관리형 스택 | PC 파일 가져오기 → CA 없이 적용(mTLS 보류) → 잘못된 PEM → CA 넣고 적용 → 클라이언트 인증서 없는 접속 거부 → 점검 | 전부 통과 | P1 | ✅ 14/14 (2026-11-11, 실제 Docker) |
+| GEO-01 | 접속자 IP·국가 | Proxied(Cloudflare 헤더) / mTLS / Tor·XX / 리눅스 직접 / Docker Desktop 게이트웨이 / Tailscale / 내부망 / 헤더가 IP 아님 | 출처(cf·direct·hidden·tailnet·lan)와 국가, 게이트웨이는 「알 수 없음」 | P1 | ✅ `TestGeoClientOf` · 실제 DB-IP DB로 길목 조회 KR·US·JP 확인 (2026-11-18) |
+| GEO-02 | Caddy 국가 차단 생성 | 준비 안 됨 / 허용·차단 방식 / Proxied·사설 사이트 / 범위 / 가져오기 | 준비될 때만 스니펫, DNS only 공개 사이트에만 import, 내부 주소 제외, 가져오기 때 버림 | P1 | ✅ `TestGeoCaddySnippet` · 실제 Caddy(모듈 포함): validate 통과, 허용 KR JP → KR·JP 200 / US 403(X-Gilmok-Block: geo) / Tailscale·내부망·Docker 200, 차단 US → US만 403 (2026-11-18) |
+| GEO-03 | 설정·로그 DB | 방식·국가 코드 검사 / 예전 DB에 열 추가 / 국가별 상위 | 잘못된 값 400, 예전 행 유지, cc·via 저장·조회 | P1 | ✅ `TestGeoSettingsAndLogDB` · 실행 중 길목: 시작 때 DB 자동 다운로드, 저장 시 적용 대기, Caddy 미준비 사유가 적용 미리보기에 (2026-11-18) |
+| E2E-01~22 | 실제 처음 설치 | 실제 Docker: 언어 → 관리자 → Caddy(네트워크 지정·내부 인증서) → Authelia(네트워크 비움) → CrowdSec → 서비스 → 점검 → 적용 → 실제 접속 → CrowdSec 재시작 → 보류 | 전부 통과 | P1 | ✅ 24/24 (2026-11-18, 실제 Docker) |
+| E2E-P2-01~14 | 예전 Caddyfile → 관리형 스택 | PC 파일 가져오기 → CA 없이 적용(mTLS 보류) → 잘못된 PEM → CA 넣고 적용 → 클라이언트 인증서 없는 접속 거부 → 점검 | 전부 통과 | P1 | ✅ 14/14 (2026-11-18, 실제 Docker) |
 
 ## INT — 기능 전체 통합 테스트 (실제 Docker, `dev/e2e/integration.py`)
 
@@ -799,7 +802,9 @@ go test -count=1 -run 'Groups|Bulk' ./...   # 일부
 | BULK·IMP 일괄·불러오기 | 7 | CSV 미리보기(추가 2·오류 1)·반영(오류 행 제외), 엑셀 내보내기, nginx 불러오기 미리보기·추가·적용·실제 응답 |
 | STK 관리형 스택 | 6 | compose 검사(깨진 YAML·정상·container_name 변경 거부), CrowdSec 정지·시작(준비될 때까지), Authelia 재시작 후 포털 정상 |
 | CFG·VIEW·UPD·CF | 20 | 설정 내보내기(비밀값 없음)·복원 미리보기, 조회 화면 16개 200, 업데이트 확인, Cloudflare 없이 DNS 화면 |
+| GEO 접속자·국가 차단 | 25 | 시작 때 DB-IP DB 자동 다운로드·국가 조회(KR, 내부 주소 없음)·출처 표기, 국가 차단 저장(소문자 → 대문자)·적용 대기, 미리보기 `(gm_geo)`+공개 사이트 3개 import, **실제 Caddy validate·reload**, Caddy 쪽 DB 복사, **미국 403 + `X-Gilmok-Block: geo`**, 한국 200, Tailscale·내부망·Docker 게이트웨이 200, 로그에 IP·국가·출처(US/JP direct, 내부망 lan), CSV `country,client_via`, 차단 기록 「국가 차단」, 대시보드 접속 국가·접속자 IP 상위·분포 점의 접속자, 끄고 원래 골격으로 적용 후 미국도 200 |
+| TODAY 대시보드·상태·재연결 | 20 | 버전 값, 실시간 범위 1m~3h 200·모르는 값 400, 과거 From~To 1시간(DB·실시간 전용 위젯 liveOnly)·25시간 400·역순 400, 요청 목록 상태 필터(st=4·2,3·0), 요청 상세 필드, 서비스 상태 전부 응답, **Caddy 컨테이너 멈춤 → 「Caddy 중단」**, 스택 상태 exited, 시작 → 정상·사이트 200, **길목을 스택 네트워크에서 뺀 뒤 재시작 → 시작 때 재연결**·서비스 「응답 없음」 없음·시스템 이벤트 |
 | RST 초기화 | 4 | 초기화, 서비스 0개·로그인 유지, **Caddy 설정은 그대로**, 사이트 계속 동작 |
-| 합계 | **91** | ✅ 91/91 (2026-11-13) — 같은 날 처음 설치 E2E 24/24 |
+| 합계 | **135** | ✅ 135/135 (2026-11-18) — 같은 날 처음 설치 E2E 24/24 (이전: 91/91, 2026-11-13) |
 
-통합 테스트에서 찾은 것: 제품 결함 없음. 실패 4건은 모두 테스트 스크립트 문제였다(백업 응답 형식, 아이디가 든 비밀번호 — 길목이 일부러 거부하는 것, 작업 대기 세션). 실제 Cloudflare API(DNS·WAF 규칙·mTLS 업로드)는 테스트용 토큰이 없어 가짜 API(httptest)로만 검증했다.
+2026-11-18 GEO·TODAY 추가에서도 제품 결함 없음(처음 실패한 3건은 테스트 스크립트가 응답 경로를 잘못 읽고 허용 목록에 없는 기간 15m을 쓴 것). 통합 테스트에서 찾은 것: 제품 결함 없음. 실패 4건은 모두 테스트 스크립트 문제였다(백업 응답 형식, 아이디가 든 비밀번호 — 길목이 일부러 거부하는 것, 작업 대기 세션). 실제 Cloudflare API(DNS·WAF 규칙·mTLS 업로드)는 테스트용 토큰이 없어 가짜 API(httptest)로만 검증했다.

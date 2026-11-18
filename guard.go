@@ -48,7 +48,7 @@ var guardProbePaths = []string{
 }
 
 var guardCategoryText = map[string]string{
-	"bot": "스캐너·공격 도구", "ai": "AI 크롤러", "noua": "User-Agent 없음", "path": "공격 경로", "php": "PHP 요청", "custom": "사용자 목록", "ip": "차단 IP",
+	"bot": "스캐너·공격 도구", "ai": "AI 크롤러", "noua": "User-Agent 없음", "path": "공격 경로", "php": "PHP 요청", "custom": "사용자 목록", "ip": "차단 IP", "geo": "국가 차단",
 }
 
 var reGuardEntry = regexp.MustCompile(`^[a-z0-9 ._/\-:+;()]{2,80}$`)

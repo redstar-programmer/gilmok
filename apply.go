@@ -31,6 +31,7 @@ type App struct {
 	ldb     *LogDB
 	auth    *Auth
 	stk     stackMgr // managed stack jobs (stacks.go)
+	geo     geoState // GeoIP country database (geoip.go)
 }
 
 type Plan struct {
@@ -54,6 +55,9 @@ func (a *App) plan(ctx context.Context, d Data, withDNS bool) Plan {
 		p.CaddyNext = GenerateCaddyfile(gen)
 		if len(heldMTLS) > 0 {
 			p.Warnings = append(p.Warnings, mtlsHeldText(heldMTLS))
+		}
+		if t := a.geoHeld(gen); t != "" {
+			p.Warnings = append(p.Warnings, t)
 		}
 		if b, err := os.ReadFile(st.CaddyfilePath); err == nil {
 			p.CaddyCurrent = string(b)
@@ -291,6 +295,9 @@ func (a *App) Apply(allowIPChange bool) ([]string, error) {
 		gen, heldMTLS = a.caddyGenData(d)
 		if len(heldMTLS) > 0 {
 			L.f("• %s", mtlsHeldText(heldMTLS))
+		}
+		if t := a.geoHeld(gen); t != "" {
+			L.f("• %s", t)
 		}
 		caddyNext = GenerateCaddyfile(gen)
 		if caddyCur, err = os.ReadFile(st.CaddyfilePath); err != nil {
@@ -558,7 +565,12 @@ func pruneBackups(root string, keep int) {
 //
 // Held sites are never served half-configured (e.g. without the mTLS check). Returns "sub (reason)".
 func (a *App) caddyGenData(d Data) (Data, []string) {
-	return caddyGenDataCA(d, a.caddyCAFile())
+	gen, held := caddyGenDataCA(d, a.caddyCAFile())
+	if gen.Settings.GeoMode != "" && gen.Settings.UseCaddy {
+		a.syncGeoToCaddy()
+		gen.geoDB, _ = a.geoCaddyReady(gen) // "" = not ready: the country block waits (shown in the plan)
+	}
+	return gen, held
 }
 
 // caddyGenDataCA: caddyGenData with the managed Caddy's CA file given ("" = not a managed Caddy) —

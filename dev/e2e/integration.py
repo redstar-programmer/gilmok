@@ -419,6 +419,179 @@ def sec_cfg(S):
 SECTIONS.append(("CFG", sec_cfg))
 
 
+def wait_http(limit=120):
+    t0 = time.time()
+    while time.time() - t0 < limit:
+        try:
+            with urllib.request.urlopen(BASE + "/api/auth/state", timeout=5) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            pass
+        time.sleep(2)
+    return False
+
+
+def sec_geo(S):
+    """GeoIP (2026-11-18): who and where in the logs/dashboard, the Caddy country block."""
+    a = S["a"]
+    for k, v in S.items():
+        globals().setdefault(k, v)
+    code, g = a.do("GET", "/api/geoip?ip=168.126.63.1")
+    check("INT-GEO-1 시작 때 DB-IP 국가 DB 자동 다운로드", code == 200 and g.get("loaded") and not g.get("error"), f"loaded={g.get('loaded')} {g.get('error', '')}")
+    check("INT-GEO-2 국가 조회 (168.126.63.1 → KR)", (g.get("lookup") or {}).get("cc") == "KR", json.dumps(g.get("lookup")))
+    code, g = a.do("GET", "/api/geoip?ip=192.168.1.5")
+    check("INT-GEO-3 내부 주소는 국가 없음", code == 200 and not (g.get("lookup") or {}).get("cc"), json.dumps(g.get("lookup")))
+    check("INT-GEO-4 출처 표기", "DB-IP" in (g.get("attribution") or ""), g.get("attribution", ""))
+
+    # trust the Docker gateway for this test only, so X-Forwarded-For stands for an outside client
+    st = a.do("GET", "/api/state")[1]["settings"]
+    base0 = st["caddyBase"]
+    s = dict(st)
+    s["caddyBase"] = base0.replace("\tlocal_certs\n}", "\tlocal_certs\n\tservers {\n\t\ttrusted_proxies static private_ranges\n\t\tclient_ip_headers X-Forwarded-For\n\t}\n}", 1)
+    s.update({"geoMode": "block", "geoCountries": "us", "geoHosts": []})
+    code, r = a.do("PUT", "/api/settings", s)
+    check("INT-GEO-5 국가 차단 저장 (us → US) · 적용 대기", code == 200 and r.get("settings", {}).get("geoCountries") == "US" and r.get("pending"), str(r)[:200])
+    code, plan = a.do("GET", "/api/plan?dns=0")
+    nxt = plan.get("caddyNext", "")
+    check("INT-GEO-6 미리보기: (gm_geo) 스니펫 + 공개 사이트 import", "(gm_geo) {" in nxt and "deny_countries US" in nxt and nxt.count("import gm_geo") >= 3, f"import {nxt.count('import gm_geo')}개 / 경고 {plan.get('warnings')}")
+    code, r = a.do("POST", "/api/apply", {})
+    check("INT-GEO-7 적용 (실제 Caddy validate·reload)", code == 200 and r.get("ok"), (r.get("error") or "")[:300])
+    cf = fi.sh("docker", "exec", "e2e-caddy", "cat", "/etc/caddy/Caddyfile")
+    check("INT-GEO-8 Caddy 쪽 DB 파일 복사", "ok" in fi.sh("docker", "exec", "e2e-caddy", "sh", "-c", "test -s /etc/caddy/geoip/country.mmdb && echo ok"), "")
+    time.sleep(2)
+    host = "auth." + DOMAIN
+    us = site(host, headers={"X-Forwarded-For": "8.8.8.8"})
+    check("INT-GEO-9 미국 접속자 → 403", us[0] == 403, f"HTTP {us[0]}")
+    raw = fi.sh("curl", "-sk", "-o", "NUL", "-D", "-", "--resolve", f"{host}:19443:127.0.0.1", "-H", "X-Forwarded-For: 8.8.8.8", f"https://{host}:19443/")
+    check("INT-GEO-10 차단 응답 헤더 X-Gilmok-Block: geo", "x-gilmok-block: geo" in raw.lower(), raw.splitlines()[0] if raw else "")
+    kr = site(host, headers={"X-Forwarded-For": "168.126.63.1"})
+    check("INT-GEO-11 한국 접속자 → 통과", kr[0] == 200, f"HTTP {kr[0]}")
+    for ip in ("100.101.102.103", "192.168.1.20"):
+        r2 = site(host, headers={"X-Forwarded-For": ip})
+        check(f"INT-GEO-12 내부 주소 {ip} → 통과 (차단 안 함)", r2[0] == 200, f"HTTP {r2[0]}")
+    r2 = site(host)
+    check("INT-GEO-13 Docker 게이트웨이(헤더 없음) → 통과", r2[0] == 200, f"HTTP {r2[0]}")
+    for _ in range(3):
+        site(host, headers={"X-Forwarded-For": "8.8.8.8"})
+        site(host, headers={"X-Forwarded-For": "133.242.0.3"})
+    time.sleep(5)
+
+    # logs: who and where
+    code, rq = a.do("GET", "/api/logs/requests?since=1h&host=" + host)
+    rows = rq.get("requests") or rq.get("rows") or []
+    us_rows = [x for x in rows if x.get("ip") == "8.8.8.8"]
+    check("INT-GEO-14 로그: 접속자 IP·국가·출처 (8.8.8.8 → US, direct)", us_rows and us_rows[0].get("cc") == "US" and us_rows[0].get("via") == "direct", json.dumps(us_rows[:1]))
+    jp = [x for x in rows if x.get("ip") == "133.242.0.3"]
+    check("INT-GEO-15 로그: 일본 접속자 JP", jp and jp[0].get("cc") == "JP", json.dumps(jp[:1]))
+    priv = [x for x in rows if x.get("ip") == "192.168.1.20"]
+    check("INT-GEO-16 로그: 내부망은 via=lan, 국가 없음", priv and priv[0].get("via") == "lan" and not priv[0].get("cc"), json.dumps(priv[:1]))
+    code, csv = a.do("GET", "/api/logs/export?cat=requests&since=1h", raw=True)
+    head = csv.decode("utf-8-sig", "replace")
+    check("INT-GEO-17 CSV 내보내기에 country·client_via 열", "country,client_via" in head.splitlines()[0] and ",US,direct" in head, head.splitlines()[0])
+    code, wv = a.do("GET", "/api/waf/events?since=1h")
+    txt = json.dumps(wv, ensure_ascii=False)
+    check("INT-GEO-18 차단 기록에 국가 차단 분류", code == 200 and '"geo"' in txt, txt[:250])
+
+    # dashboard: top countries / clients, scatter who, status filter
+    ws = [{"id": "c", "type": "top", "dim": "country"}, {"id": "i", "type": "top", "dim": "client"}, {"id": "p", "type": "scatter"}]
+    code, d = a.do("POST", "/api/dash/data", {"widgets": ws, "range": "30m"})
+    d = d.get("data") or {}
+    dj = json.dumps(d, ensure_ascii=False)
+    top_c = json.dumps(d.get("c") or {}, ensure_ascii=False)
+    check("INT-GEO-19 대시보드 「접속 국가」 상위 (US·JP·KR)", code == 200 and all(f'"{c}"' in top_c for c in ("US", "JP", "KR")), top_c[:200])
+    check("INT-GEO-20 대시보드 「접속자 IP」 상위에 8.8.8.8", "8.8.8.8" in json.dumps(d.get("i") or {}), "")
+    check("INT-GEO-21 응답시간 분포 점마다 접속자 (who)", '"who"' in dj and "8.8.8.8" in json.dumps((d.get("p") or {}).get("who")), "")
+
+    # back to the base without the test trust, country block off
+    s2 = a.do("GET", "/api/state")[1]["settings"]
+    s2.update({"caddyBase": base0, "geoMode": "", "geoCountries": ""})
+    code, _ = a.do("PUT", "/api/settings", s2)
+    code2, r = a.do("POST", "/api/apply", {})
+    check("INT-GEO-22 국가 차단 끄고 원래 골격으로 적용", code == 200 and r.get("ok") and "gm_geo" not in fi.sh("docker", "exec", "e2e-caddy", "cat", "/etc/caddy/Caddyfile"), (r.get("error") or "")[:200])
+    check("INT-GEO-23 끈 뒤 미국 주소도 통과", site(host, headers={"X-Forwarded-For": "8.8.8.8"})[0] == 200)
+
+
+SECTIONS.append(("GEO", sec_geo))
+
+
+def sec_today(S):
+    """Dashboard ranges / past window / status filter, service status, Caddy down, network rejoin, version."""
+    a, pw = S["a"], S["pw"]
+    for k, v in S.items():
+        globals().setdefault(k, v)
+    code, st = a.do("GET", "/api/auth/state")
+    check("INT-DAY-1 버전 표시 값 (/api/auth/state)", st.get("version") == "e2e", str(st.get("version")))
+    for _ in range(4):
+        site("auth." + DOMAIN)
+        site("open." + DOMAIN, "/nope-404")
+    time.sleep(4)
+    ws = [{"id": "r", "type": "stat", "metric": "requests"}, {"id": "s", "type": "series", "metric": "status"}]
+    ranges = {}
+    for rg in ("1m", "5m", "10m", "30m", "1h", "2h", "3h"):
+        ranges[rg] = a.do("POST", "/api/dash/data", {"widgets": ws, "range": rg})[0]
+    check("INT-DAY-2 실시간 범위 1m~3h 모두 200", all(c == 200 for c in ranges.values()), json.dumps(ranges))
+    code, _ = a.do("POST", "/api/dash/data", {"widgets": ws, "range": "7m"})
+    check("INT-DAY-3 모르는 범위(7m) → 400", code == 400, f"HTTP {code}")
+    now = int(time.time() * 1000)
+    code, d = a.do("POST", "/api/dash/data", {"widgets": ws + [{"id": "h", "type": "health"}], "from": now - 3600_000, "to": now})
+    hist = json.dumps(d, ensure_ascii=False)
+    check("INT-DAY-4 과거 From~To 1시간 → DB 조회, 실시간 전용 위젯은 liveOnly", code == 200 and "liveOnly" in hist, hist[:200])
+    code, _ = a.do("POST", "/api/dash/data", {"widgets": ws, "from": now - 25 * 3600_000, "to": now})
+    check("INT-DAY-5 과거 창 25시간 → 400 (최대 1일)", code == 400, f"HTTP {code}")
+    code, _ = a.do("POST", "/api/dash/data", {"widgets": ws, "from": now, "to": now - 3600_000})
+    check("INT-DAY-6 끝이 시작보다 앞 → 400", code == 400, f"HTTP {code}")
+    q = f"/api/dash/requests?from={now - 3600_000}&to={int(time.time() * 1000)}"
+    c4, r4 = a.do("GET", q + "&st=4")
+    l4 = r4.get("requests") or r4.get("rows") or []
+    check("INT-DAY-7 상태 필터 st=4 → 4xx만", c4 == 200 and l4 and all(400 <= x["status"] < 500 for x in l4), f"{len(l4)}건")
+    c2, r2 = a.do("GET", q + "&st=2,3")
+    l2 = r2.get("requests") or r2.get("rows") or []
+    check("INT-DAY-8 상태 필터 st=2,3 → 2xx·3xx만", c2 == 200 and l2 and all(200 <= x["status"] < 400 for x in l2), f"{len(l2)}건")
+    c0, r0 = a.do("GET", q + "&st=0")
+    check("INT-DAY-9 st=0 (모두 숨김) → 0건", c0 == 200 and not (r0.get("requests") or r0.get("rows")), "")
+    if l4:
+        x = l4[0]
+        check("INT-DAY-10 요청 상세: 사이트·요청·접속자", x.get("host") and x.get("uri") is not None and "ip" in x, json.dumps(x, ensure_ascii=False)[:200])
+
+    # service status + Caddy down
+    code, h = a.do("GET", "/api/health")
+    svcs = h.get("services") or {}
+    check("INT-DAY-11 서비스 상태: 전부 응답", svcs and all(v.get("ok") for v in svcs.values()), json.dumps({k: v.get("ok") for k, v in svcs.items()}))
+    check("INT-DAY-12 Caddy 실행 중으로 표시", (h.get("caddy") or {}).get("known") and not h["caddy"].get("down"), json.dumps(h.get("caddy")))
+    fi.sh("docker", "stop", "e2e-caddy")
+    time.sleep(11)  # the state is cached for 10 s
+    h = a.do("GET", "/api/health")[1]
+    check("INT-DAY-13 Caddy를 멈추면 「Caddy 중단」(down, exited)", (h.get("caddy") or {}).get("down") and h["caddy"].get("state") == "exited", json.dumps(h.get("caddy")))
+    code, sk = a.do("GET", "/api/stacks")
+    cs = ((sk.get("stacks") or {}).get("caddy") or {})
+    check("INT-DAY-14 관리형 스택 상태에 멈춤이 보임 (대시보드 띠)", "exited" in json.dumps(cs) or cs.get("running") is False, json.dumps({k: cs.get(k) for k in ("state", "running", "status")}))
+    code, r = a.do("POST", "/api/stacks/caddy/start", {})
+    j = wait_job(a, "caddy", 300)
+    check("INT-DAY-15 대시보드에서 바로 시작 → 정상", j.get("state") == "ok", (j.get("error") or "")[:200])
+    time.sleep(11)
+    h = a.do("GET", "/api/health")[1]
+    check("INT-DAY-16 다시 실행 중으로", not (h.get("caddy") or {}).get("down"), json.dumps(h.get("caddy")))
+    check("INT-DAY-17 시작 후 사이트 정상", site("auth." + DOMAIN)[0] == 200)
+
+    # Gilmok updated / recreated without the stack network → rejoins it at start
+    fi.sh("docker", "network", "disconnect", "gm-e2e-net", "gm-e2e")
+    fi.sh("docker", "restart", "gm-e2e")
+    up = wait_http()
+    time.sleep(8)
+    nets = fi.sh("docker", "inspect", "-f", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}", "gm-e2e")
+    check("INT-DAY-18 재시작 뒤 관리형 스택 네트워크 재연결", up and "gm-e2e-net" in nets, nets)
+    code, _ = a.do("POST", "/api/auth/login", {"name": "tester", "password": pw})
+    code, h = a.do("GET", "/api/health")
+    svcs = h.get("services") or {}
+    check("INT-DAY-19 재연결 뒤 서비스 상태 「응답 없음」 없음", code == 200 and svcs and all(v.get("ok") for v in svcs.values()), json.dumps({k: (v.get("ok"), v.get("err")) for k, v in svcs.items()})[:300])
+    code, ev = a.do("GET", "/api/logs/events?cat=system")
+    check("INT-DAY-20 시스템 이벤트에 네트워크 재연결 기록", "gm-e2e-net" in json.dumps(ev, ensure_ascii=False), "")
+
+
+SECTIONS.append(("TODAY", sec_today))
+
+
 def sec_reset(S):
     a, pw = S["a"], S["pw"]
     for k, v in S.items():
