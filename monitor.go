@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -506,11 +507,38 @@ func clientOf(e accessLine) (ip, cc, via string) {
 func (a *App) logStreamLoop() {
 	for {
 		st := a.store.Snapshot().Settings
-		if !st.UseCaddy || caddyMode(st) != "docker" {
+		if st.UseCaddy && caddyMode(st) != "docker" {
+			// Caddy outside Docker: follow the access log file it writes (if one is set)
+			if path := caddyLogReadPath(st); path != "" {
+				err := a.followLogFile(path)
+				a.mon.mu.Lock()
+				a.mon.streamOK = false
+				if err != nil {
+					a.mon.streamErr = fmt.Sprintf("Caddy 접근 로그 파일을 읽지 못했습니다 (%s): %s", path, oneLine(err.Error()))
+				}
+				noisy := time.Since(a.mon.streamLogAt) < 10*time.Minute
+				if err != nil && !noisy {
+					a.mon.streamLogAt = time.Now()
+				}
+				msg := a.mon.streamErr
+				a.mon.mu.Unlock()
+				if err != nil && !noisy {
+					a.logEvent("system", "warn", "caddy.logstream", path, "Caddy 로그 수집이 끊겼습니다 — 다시 연결합니다: "+msg, nil)
+				}
+				time.Sleep(5 * time.Second)
+				continue
+			}
 			a.mon.mu.Lock()
-			a.mon.streamOK, a.mon.streamErr = false, "Docker의 Caddy를 쓰지 않아 요청 통계를 모으지 않습니다"
+			a.mon.streamOK, a.mon.streamErr = false, "Caddy가 Docker 밖에 있어 접근 로그 파일을 정해야 요청 통계를 모읍니다 — Caddy 탭 › 연결의 「접근 로그 파일」"
 			a.mon.mu.Unlock()
-			time.Sleep(30 * time.Second)
+			time.Sleep(5 * time.Second) // a settings snapshot: cheap; picks up a new setting quickly
+			continue
+		}
+		if !st.UseCaddy {
+			a.mon.mu.Lock()
+			a.mon.streamOK, a.mon.streamErr = false, "Caddy를 쓰지 않아 요청 통계를 모으지 않습니다"
+			a.mon.mu.Unlock()
+			time.Sleep(5 * time.Second)
 			continue
 		}
 		ctr := st.CaddyContainer
@@ -551,18 +579,7 @@ func (a *App) logStreamLoop() {
 			var lastErrLine string
 			for sc.Scan() {
 				line := sc.Text()
-				if r, ok := parseAccessLine(line); ok {
-					a.fillCountry(&r)
-					if r.T > last {
-						a.mon.addReq(r)
-						a.ldb.Req(r)
-					}
-					continue
-				}
-				if ev, ok := parseWAFLine(line); ok && ev.Action == "denied" && ev.Time.UnixMilli() > last {
-					a.mon.addWaf(ev)
-					a.ldb.Event(Event{Ts: ev.Time.UnixMilli(), Cat: "security", Level: "warn", Action: "waf.block", Target: "규칙 " + ev.RuleID, Msg: "WAF 차단: " + truncate(ev.Msg, 200), Actor: "caddy-waf",
-						Detail: mustJSON(map[string]string{"rule": ev.RuleID, "uri": ev.URI, "data": ev.Data, "tx": ev.TxID})})
+				if a.feedLogLine(line, last) {
 					continue
 				}
 				if !strings.HasPrefix(line, "{") {
@@ -592,6 +609,96 @@ func (a *App) logStreamLoop() {
 			a.logEvent("system", "warn", "caddy.logstream", ctr, "Caddy 로그 수집이 끊겼습니다 — 다시 연결합니다: "+msg, nil)
 		}
 		time.Sleep(5 * time.Second)
+	}
+}
+
+// feedLogLine: one line of Caddy's output — an access line (dashboard, log DB) or a WAF denial.
+// Lines at or before last were already counted (a reconnect replays them). false = not ours.
+func (a *App) feedLogLine(line string, last int64) bool {
+	if r, ok := parseAccessLine(line); ok {
+		a.fillCountry(&r)
+		if r.T > last {
+			a.mon.addReq(r)
+			a.ldb.Req(r)
+		}
+		return true
+	}
+	if ev, ok := parseWAFLine(line); ok {
+		if ev.Action == "denied" && ev.Time.UnixMilli() > last {
+			a.mon.addWaf(ev)
+			a.ldb.Event(Event{Ts: ev.Time.UnixMilli(), Cat: "security", Level: "warn", Action: "waf.block", Target: "규칙 " + ev.RuleID, Msg: "WAF 차단: " + truncate(ev.Msg, 200), Actor: "caddy-waf",
+				Detail: mustJSON(map[string]string{"rule": ev.RuleID, "uri": ev.URI, "data": ev.Data, "tx": ev.TxID})})
+		}
+		return true
+	}
+	return false
+}
+
+// followLogFile follows the access log Caddy writes outside Docker until the setting changes or
+// reading fails. The file is opened only to read what was added and closed again right away:
+// holding it open would keep Caddy from rolling it on Windows. A file smaller than what was
+// already read was rolled (or truncated) → start at its beginning. On (re)start it reads the last
+// 64 MiB and takes the lines after the last request seen — or of the last hour when there is none
+// (a new setting: what Caddy wrote since the apply is not lost).
+func (a *App) followLogFile(path string) error {
+	a.mon.mu.Lock()
+	last := a.mon.lastTs
+	a.mon.mu.Unlock()
+	if last <= 0 {
+		last = time.Now().Add(-time.Hour).UnixMilli()
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	off := max(0, fi.Size()-64<<20)
+	a.mon.mu.Lock()
+	a.mon.streamOK, a.mon.streamErr, a.mon.streamAt = true, "", time.Now()
+	a.mon.mu.Unlock()
+	buf := make([]byte, 256<<10)
+	var partial []byte
+	for {
+		st := a.store.Snapshot().Settings
+		if !st.UseCaddy || caddyLogReadPath(st) != path {
+			return nil
+		}
+		fi, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		if fi.Size() < off {
+			off, partial = 0, nil
+		}
+		if fi.Size() > off {
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			_, err = f.Seek(off, io.SeekStart)
+			for err == nil {
+				var n int
+				n, err = f.Read(buf)
+				off += int64(n)
+				partial = append(partial, buf[:n]...)
+				for {
+					i := bytes.IndexByte(partial, '\n')
+					if i < 0 {
+						break
+					}
+					a.feedLogLine(string(bytes.TrimRight(partial[:i], "\r")), last)
+					partial = partial[i+1:]
+				}
+				if len(partial) > 1<<20 { // not a log line
+					partial = nil
+				}
+			}
+			f.Close()
+			if err != io.EOF {
+				return err
+			}
+			partial = append([]byte(nil), partial...) // drop the consumed prefix
+		}
+		time.Sleep(time.Second)
 	}
 }
 

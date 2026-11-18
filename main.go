@@ -27,7 +27,7 @@ import (
 //go:embed web
 var webFS embed.FS
 
-var version = "0.1.14"
+var version = "0.1.15"
 
 func main() {
 	dataDir := env("GM_DATA", "/data")
@@ -910,7 +910,7 @@ func systemSettingKey(k string) bool {
 	switch k {
 	case "caddyfilePath", "caddyfileInCtr", "caddyContainer", "autheliaContainer", "autheliaConfig", "autheliaUsers",
 		"autheliaCtrDir", "caddyStackDir", "autheliaStackDir", "caddyService", "autheliaService",
-		"crowdsecContainer", "crowdsecLapi", "caddyMode", "caddyBin", "caddyAdmin":
+		"crowdsecContainer", "crowdsecLapi", "caddyMode", "caddyBin", "caddyAdmin", "caddyLogFile", "caddyLogRead":
 		return true
 	}
 	return strings.HasPrefix(k, "use")
@@ -949,6 +949,19 @@ func (a *App) checkSystemSettings(cur, in Settings) error {
 			d = filepath.Clean(d)
 			if p == d || strings.HasPrefix(p, d+string(filepath.Separator)) {
 				return fmt.Errorf("%s 로 %s 를 쓸 수 없습니다 — 길목 데이터·비밀값·시스템 폴더는 가리킬 수 없습니다", f.name, d)
+			}
+		}
+	}
+	// the access log Gilmok follows: an absolute path outside its own data / system folders
+	if read := caddyLogReadPath(in); read != "" && read != caddyLogReadPath(cur) {
+		p := filepath.Clean(read)
+		if !filepath.IsAbs(p) && !strings.HasPrefix(read, "/") {
+			return errors.New("Caddy 접근 로그 경로(길목이 읽는 위치)는 절대 경로여야 합니다")
+		}
+		for _, d := range deny {
+			d = filepath.Clean(d)
+			if p == d || strings.HasPrefix(p, d+string(filepath.Separator)) {
+				return fmt.Errorf("Caddy 접근 로그로 %s 아래를 읽을 수 없습니다", d)
 			}
 		}
 	}
@@ -1112,6 +1125,13 @@ func normalizeSettings(p *Settings) error {
 		in.CaddyMode = "docker"
 	}
 	in.CaddyAdmin = strings.TrimRight(strings.TrimSpace(in.CaddyAdmin), "/")
+	in.CaddyLogFile, in.CaddyLogRead = strings.TrimSpace(in.CaddyLogFile), strings.TrimSpace(in.CaddyLogRead)
+	if in.CaddyLogFile != "" && !caddyLogPathOK(in.CaddyLogFile) {
+		return errors.New("Caddy 접근 로그 파일은 절대 경로여야 하고 따옴표·중괄호·줄바꿈을 쓸 수 없습니다 (예: C:/caddy/logs/access.log, /var/log/caddy/access.log)")
+	}
+	if in.CaddyLogRead != "" && !caddyLogPathOK(in.CaddyLogRead) {
+		return errors.New("길목이 읽는 Caddy 접근 로그 경로가 올바르지 않습니다")
+	}
 	if in.CaddyMode == "api" && !strings.HasPrefix(in.CaddyAdmin, "http://") && !strings.HasPrefix(in.CaddyAdmin, "https://") {
 		return errors.New("Caddy 관리 API 주소는 http:// 로 시작해야 합니다 (예: http://host.docker.internal:2019)")
 	}

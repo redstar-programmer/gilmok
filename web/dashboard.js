@@ -842,9 +842,9 @@ function paintStream() {
     dashEmpty.replaceChildren(...(none ? [callout('', h('b', null, '아직 수집된 요청이 없습니다'),
       h('span', { class: 'small' }, 'Caddy 로그 수집은 연결되어 있습니다. 사이트에 접속이 생기면 10초 단위로 요청·응답시간 차트가 채워집니다. 서비스 상태·컨테이너·인증서 위젯은 지금도 동작합니다.'))] : []));
   }
-  if (!use('caddy') || (settings().caddyMode && settings().caddyMode !== 'docker')) { chip.replaceChildren(h('span', { class: 'muted small' }, '요청 통계 수집 안 함')); return; }
+  if (!statsSource()) { chip.replaceChildren(h('span', { class: 'muted small' }, '요청 통계 수집 안 함')); return; }
   chip.replaceChildren(s.ok
-    ? statusPill('good', `Caddy 로그 수집 중${s.lastTs ? ` · 마지막 요청 ${ago(s.lastTs)}` : ''}`)
+    ? statusPill('good', `${statsSource() === 'file' ? 'Caddy 접근 로그 파일 수집 중' : 'Caddy 로그 수집 중'}${s.lastTs ? ` · 마지막 요청 ${ago(s.lastTs)}` : ''}`)
     : statusPill('crit', `로그 수집 끊김${s.error ? ` — ${s.error}` : ''}`));
 }
 
@@ -869,6 +869,15 @@ async function pollDash(now) {
   }
   const every = +(localStorage.getItem('gm.dashRefresh') || 5);
   if (every > 0 && gen === DASH.gen && !DASH.at) DASH.timer = setTimeout(() => pollDash(false), every * 1000);
+}
+
+/** where request statistics come from: 'docker' (container output), 'file' (Caddy outside Docker
+ *  writing an access log file Gilmok follows), or '' (none) */
+function statsSource() {
+  const st = settings();
+  if (!use('caddy')) return '';
+  if (!st.caddyMode || st.caddyMode === 'docker') return 'docker';
+  return st.caddyLogFile ? 'file' : '';
 }
 
 function renderDashboard(panel) {
@@ -943,8 +952,14 @@ function renderDashboard(panel) {
     h('h1', null, '대시보드'), h('span', { class: 'stream-chip', 'aria-live': 'polite' }),
     h('span', { class: 'grow' }), mode, spanSel, pastBox, refresh, now, resetBtn, addBtn, editBtn);
   let banner = null;
-  if (!use('caddy') || (st.caddyMode && st.caddyMode !== 'docker')) {
-    banner = callout('', h('b', null, '요청 통계 없음'), h('span', { class: 'small' }, use('caddy') ? 'Docker가 아닌 Caddy는 접근 로그를 길목이 읽을 수 없어 요청 관련 위젯이 비어 있습니다. 서비스 상태·컨테이너·이벤트 위젯은 동작합니다.' : 'Caddy를 쓰지 않는 구성이라 요청 관련 위젯은 비어 있습니다. 서비스 상태·컨테이너 위젯은 동작합니다.'));
+  if (!use('caddy')) {
+    banner = callout('', h('b', null, '요청 통계 없음'), h('span', { class: 'small' }, 'Caddy를 쓰지 않는 구성이라 요청 관련 위젯은 비어 있습니다. 서비스 상태·컨테이너 위젯은 동작합니다.'));
+  } else if (!statsSource()) {
+    const go = h('button', { type: 'button', class: 'btn sm primary' }, '접근 로그 파일 정하기');
+    go.addEventListener('click', () => gotoTab('caddy', 'conn'));
+    banner = callout('', h('b', null, '요청 통계 없음 — Docker 밖의 Caddy는 접근 로그 파일을 정해야 합니다'),
+      h('span', { class: 'small' }, 'Caddy 탭 › 연결의 「접근 로그 파일」에 Caddy가 로그를 쓸 경로를 적고 적용하면, 길목이 그 파일을 읽어 요청 관련 위젯을 채웁니다. 서비스 상태·이벤트 위젯은 지금도 동작합니다.'),
+      h('div', null, go));
   } else if (!st.dashLogs) {
     const on = h('button', { type: 'button', class: 'btn sm primary' }, '접근 로그 켜기');
     on.addEventListener('click', () => busy(on, async () => {

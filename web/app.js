@@ -2397,6 +2397,8 @@ function renderCaddy(panel) {
     { key: 'caddyContainer', label: 'Caddy 컨테이너', mono: true, hint: 'docker ps 에 보이는 이름', picker: 'container' },
     { key: 'caddyAdmin', label: 'Caddy 관리 API 주소', mono: true, placeholder: 'http://host.docker.internal:2019', hint: '길목에서 접속할 수 있는 주소' },
     { key: 'caddyBin', label: 'caddy 실행 파일', mono: true, placeholder: 'C:\\Caddy\\caddy.exe', hint: 'PATH에 있으면 caddy' },
+    { key: 'caddyLogFile', label: '접근 로그 파일 — Caddy가 쓰는 위치', mono: true, placeholder: 'C:/Caddy/logs/access.log', hint: '정하면 길목이 사이트마다 이 파일로 접근 로그를 남기게 하고(적용 필요, 50MB마다 교체·3개 보관), 그 파일을 읽어 대시보드·로그를 채웁니다. 비우면 요청 통계 없음' },
+    { key: 'caddyLogRead', label: '접근 로그 파일 — 길목이 보는 위치', mono: true, placeholder: '/stacks/caddy-logs/access.log', hint: '로그 폴더를 길목 컨테이너에 마운트한 경로 (예: compose volumes에 C:/Caddy/logs:/stacks/caddy-logs:ro)' },
     { key: 'caddyfilePath', label: 'Caddyfile 경로 — 길목이 보는 위치', mono: true, picker: 'caddyfile', hint: '길목이 읽고 쓰는 파일 (예: /stacks/caddy/Caddyfile)' },
     { key: 'caddyfileInCtr', label: 'Caddyfile 경로 — Caddy 컨테이너 안', mono: true, hint: 'caddy reload 가 읽는 파일 (보통 /etc/caddy/Caddyfile)' },
   ], { actions: [conn.btn], extra: modeHelp, onSaved: () => conn.run(true) });
@@ -2404,15 +2406,16 @@ function renderCaddy(panel) {
     const inp = connForm.inputs;
     const show = () => {
       const m = inp.caddyMode.value;
-      const vis = { caddyContainer: m === 'docker', caddyfileInCtr: m === 'docker', caddyAdmin: m === 'api', caddyBin: m === 'native' };
+      const vis = { caddyContainer: m === 'docker', caddyfileInCtr: m === 'docker', caddyAdmin: m === 'api', caddyBin: m === 'native', caddyLogFile: m !== 'docker', caddyLogRead: m === 'api' };
       for (const [k, v] of Object.entries(vis)) inp[k].closest('.field').hidden = !v;
       fill(modeHelp, m === 'api' ? callout('', h('b', null, '관리 API 연결 (Windows native Caddy 등)'),
         h('ol', { class: 'flow' },
           h('li', null, 'Caddyfile 전역 옵션(기본 골격)에 ', h('code', null, 'admin 0.0.0.0:2019 { origins host.docker.internal:2019 }'), ' 를 넣고 Caddy를 다시 시작'),
           h('li', null, 'Windows 방화벽에서 TCP 2019는 Docker(WSL) 대역만 허용 — 관리 API는 Caddy 전체를 바꿀 수 있습니다'),
-          h('li', null, 'Caddyfile이 있는 폴더를 길목 컨테이너에 마운트하고, 위의 「길목이 보는 위치」에 그 경로를 적기')),
-        h('span', { class: 'small' }, '검증은 /adapt, 적용은 /load(실패하면 Caddy가 이전 설정 유지). 대시보드 요청 통계와 이미지 업데이트는 Docker 모드에서만 됩니다.'))
-        : m === 'native' ? callout('', h('b', null, '같은 PC의 caddy 실행 파일'), h('span', null, '길목을 Docker가 아니라 같은 PC에서 직접 실행할 때 씁니다(gilmok.exe). caddy validate / caddy reload 를 직접 호출합니다.'))
+          h('li', null, 'Caddyfile이 있는 폴더를 길목 컨테이너에 마운트하고, 위의 「길목이 보는 위치」에 그 경로를 적기'),
+          h('li', null, '대시보드 요청 통계를 보려면: Caddy 로그 폴더도 길목 컨테이너에 마운트하고, 「접근 로그 파일」 두 칸(Caddy가 쓰는 위치 / 길목이 보는 위치)을 적은 뒤 적용')),
+        h('span', { class: 'small' }, '검증은 /adapt, 적용은 /load(실패하면 Caddy가 이전 설정 유지). Caddy 재시작·업데이트는 길목이 하지 않습니다 — Caddy를 설치한 방식(서비스 관리자 등)으로 하세요.'))
+        : m === 'native' ? callout('', h('b', null, '같은 PC의 caddy 실행 파일'), h('span', null, '길목을 Docker가 아니라 같은 PC에서 직접 실행할 때 씁니다(gilmok.exe). caddy validate / caddy reload 를 직접 호출합니다. 대시보드 요청 통계는 「접근 로그 파일」을 적고 적용하면 모입니다. Caddy 재시작·업데이트는 길목이 하지 않습니다.'))
           : null);
     };
     inp.caddyMode.addEventListener('change', show);

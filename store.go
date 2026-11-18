@@ -169,6 +169,11 @@ type Settings struct {
 	CaddyMode  string `json:"caddyMode"`
 	CaddyBin   string `json:"caddyBin"`   // native: path of caddy(.exe)
 	CaddyAdmin string `json:"caddyAdmin"` // api: http://host.docker.internal:2019
+	// api / native: the access log file — Caddy writes it (CaddyLogFile, Caddy's own path), Gilmok
+	// follows it for the dashboard (CaddyLogRead, the same file as Gilmok sees it; "" = same path).
+	// Empty = no request statistics outside Docker.
+	CaddyLogFile string `json:"caddyLogFile"`
+	CaddyLogRead string `json:"caddyLogRead"`
 
 	// Access security (see security.go)
 	SecInit        bool   `json:"secInit"`

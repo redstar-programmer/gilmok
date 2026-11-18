@@ -216,12 +216,19 @@ func parseSite(b caddyBlock, st Settings) (*Service, []string) {
 		return stripComment(strings.TrimSpace(b.body[i]))
 	}
 	isRealIP := func(c string) bool { return strings.HasPrefix(c, "log_append gm_") } // generated access-log fields
+	skipUntil := -1                                                                   // a generated block being dropped
 	for i, raw := range b.body {
+		if i <= skipUntil {
+			continue
+		}
 		line := dedent(raw)
 		trim := strings.TrimSpace(raw)
 		code := stripComment(trim)
 		if depth == 0 {
 			switch {
+			case code == "log {" && commentOf(trim) == "gilmok":
+				skipUntil = blockEnd(b.body, i) // generated: access log to a file (Caddy outside Docker)
+				continue
 			case code == "import "+snippetWAFBlock, strings.HasPrefix(code, "import "+snippetWAFBlock+"_"):
 				s.WAF = WAFBlock
 				continue
@@ -314,7 +321,7 @@ func GenerateCaddyfile(d Data) string {
 		}
 		cs := crowdsecLogging(s, st)
 		if (cs || st.DashLogs) && !extraHasLog(s.Extra) {
-			sb.WriteString("\tlog # gilmok\n") // marker: recognized (and dropped) on import
+			sb.WriteString(accessLogDirective(st)) // marked "# gilmok": recognized (and dropped) on import
 		}
 		if cs {
 			sb.WriteString("\tlog_append " + realIPField + " {http.request.header.Cf-Connecting-Ip}\n")
@@ -464,4 +471,46 @@ func checkBraces(text string) error {
 		return fmt.Errorf("중괄호 { } 개수가 맞지 않습니다")
 	}
 	return nil
+}
+
+// accessLogDirective: the per-site access log. In Docker it goes to the container output (docker
+// logs); outside Docker to the file Gilmok follows (CaddyLogFile), rolled at 50 MiB.
+func accessLogDirective(st Settings) string {
+	if caddyMode(st) == "docker" || st.CaddyLogFile == "" {
+		return "\tlog # gilmok\n"
+	}
+	p := strings.ReplaceAll(st.CaddyLogFile, "\\", "/") // Windows accepts / and the Caddyfile keeps it as is
+	return "\tlog { # gilmok\n\t\toutput file \"" + p + "\" {\n\t\t\troll_size 50MiB\n\t\t\troll_keep 3\n\t\t}\n\t}\n"
+}
+
+// caddyLogPathOK: an absolute path (Unix or Windows drive) that is safe inside a quoted Caddyfile token.
+func caddyLogPathOK(p string) bool {
+	if strings.ContainsAny(p, "\"'`{}\r\n\t#") {
+		return false
+	}
+	return strings.HasPrefix(p, "/") || len(p) > 3 && p[1] == ':' && (p[2] == '\\' || p[2] == '/') && (p[0]|0x20 >= 'a' && p[0]|0x20 <= 'z')
+}
+
+// caddyLogReadPath: where Gilmok reads the access log ("" = not configured).
+func caddyLogReadPath(st Settings) string {
+	if caddyMode(st) == "docker" || st.CaddyLogFile == "" {
+		return ""
+	}
+	if st.CaddyLogRead != "" {
+		return st.CaddyLogRead
+	}
+	return st.CaddyLogFile
+}
+
+// blockEnd: the line closing the block opened on body[start].
+func blockEnd(body []string, start int) int {
+	depth := 0
+	for j := start; j < len(body); j++ {
+		c := stripComment(strings.TrimSpace(body[j]))
+		depth += strings.Count(c, "{") - strings.Count(c, "}")
+		if depth <= 0 {
+			return j
+		}
+	}
+	return len(body) - 1
 }
