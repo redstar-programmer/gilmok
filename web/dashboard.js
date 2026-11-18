@@ -3,14 +3,16 @@
 // categorical slots + reserved status colors (always paired with a text label).
 'use strict';
 
-const DASH = { widgets: null, data: null, stream: null, edit: false, gen: 0, cards: new Map(), lastSize: new Map(), at: 0, from: 0, span: dashSpanSaved() };
-
-/** whole-dashboard range of the live view ("" = each widget's own); the past view is a From~To window of at most a day */
-const DASH_SPANS = [['', '위젯 설정대로'], ['1m', '최근 1분'], ['5m', '최근 5분'], ['10m', '최근 10분'], ['30m', '최근 30분'], ['1h', '최근 1시간'], ['2h', '최근 2시간'], ['3h', '최근 3시간']];
+/** range of the live view, for every widget (15 minutes by default); the past view is a From~To window of at most a day */
+const DASH_SPANS = [['1m', '최근 1분'], ['5m', '최근 5분'], ['10m', '최근 10분'], ['15m', '최근 15분'], ['30m', '최근 30분'], ['1h', '최근 1시간'], ['2h', '최근 2시간'], ['3h', '최근 3시간']];
+const DASH_SPAN_DEFAULT = '15m';
 const DASH_MAX_WINDOW = 24 * 3600e3;
 function dashSpanSaved() {
-  try { const v = localStorage.getItem('gm.dashSpan') || ''; return ['1m', '5m', '10m', '30m', '1h', '2h', '3h'].includes(v) ? v : ''; } catch { return ''; }
+  try { const v = localStorage.getItem('gm.dashSpan') || ''; return DASH_SPANS.some(([k]) => k === v) ? v : DASH_SPAN_DEFAULT; } catch { return DASH_SPAN_DEFAULT; }
 }
+// after DASH_SPANS: dashSpanSaved reads them
+const DASH = { widgets: null, data: null, stream: null, edit: false, gen: 0, cards: new Map(), lastSize: new Map(), at: 0, from: 0, span: dashSpanSaved() };
+
 function fmtWindow(from, to) {
   const o = { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false };
   return `${new Date(from).toLocaleString(gmLocale(), o)} ~ ${new Date(to).toLocaleString(gmLocale(), o)}`;
@@ -506,7 +508,7 @@ function openWidgetEditor(existing) {
   };
   const errEl = h('p', { class: 'form-error', role: 'alert', hidden: true });
   const form = h('div', { class: 'stack' }, errEl,
-    h('div', { class: 'field' }, h('span', { class: 'field-label' }, '종류'), typeList),
+    isNew ? h('div', { class: 'field' }, h('span', { class: 'field-label' }, '종류'), typeList) : h('p', { class: 'muted small' }, `종류: ${WIDGET_TYPES[wd.type].name} — 다른 종류는 「위젯 추가」에서 새로 넣으세요`),
     h('div', { class: 'grid-2' }, field('제목', title), h('div', { class: 'grid-2' }, field('너비', wSel), field('높이', hSel))),
     h('div', { class: 'grid-2' }, f.statM, f.serM, f.dim, f.range, f.host, f.limit, f.warn, f.ctr), ctrList);
   const cur = () => typeList.querySelector('input:checked').value;
@@ -514,7 +516,7 @@ function openWidgetEditor(existing) {
     const t = cur();
     if (changedType) { const d = WIDGET_TYPES[t].def; wSel.value = String(d.w); hSel.value = String(d.h); }
     f.statM.hidden = t !== 'stat'; f.serM.hidden = t !== 'series'; f.dim.hidden = t !== 'top'; f.limit.hidden = t !== 'top';
-    f.range.hidden = !['stat', 'series', 'scatter', 'top', 'map'].includes(t) || (t === 'stat' && NO_RANGE_STATS.has(statM.value));
+    f.range.hidden = true; // the dashboard's own range (실시간 기간 / 과거 보기) applies to every widget
     f.host.hidden = !['stat', 'series', 'scatter', 'top', 'map'].includes(t) || (t === 'stat' && ['csBans', 'healthUp', 'certDays'].includes(statM.value));
     f.warn.hidden = t !== 'stat' || ['csBans', 'healthUp'].includes(statM.value);
     f.ctr.hidden = t !== 'containers';
@@ -567,6 +569,178 @@ function autoTitle(w) {
   }
 }
 
+// ---- drag to reorder: the dragged card moves in the grid as the pointer goes, the others slide
+// out of the way (FLIP animation); the order is saved once, on drop
+let dashDrag = null;
+function dragSortable(card) {
+  card.addEventListener('dragstart', (e) => {
+    dashDrag = { card, before: [...dashGrid.children].map((c) => c.dataset.wid).join() };
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', card.dataset.wid);
+    requestAnimationFrame(() => card.classList.add('dragging'));
+  });
+  card.addEventListener('dragover', (e) => {
+    if (!dashDrag || dashDrag.card === card) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const r = card.getBoundingClientRect();
+    // the pointer in the first half of a card (left half; top half for full-width cards) → before it
+    const before = r.width > dashGrid.clientWidth * 0.9 ? e.clientY < r.top + r.height / 2 : e.clientX < r.left + r.width / 2;
+    const ref = before ? card : card.nextElementSibling;
+    if (ref === dashDrag.card || dashDrag.card.nextElementSibling === ref) return; // already there
+    flipMove(() => dashGrid.insertBefore(dashDrag.card, ref));
+  });
+  card.addEventListener('drop', (e) => e.preventDefault());
+  card.addEventListener('dragend', () => {
+    card.classList.remove('dragging');
+    const d = dashDrag;
+    dashDrag = null;
+    if (!d) return;
+    const order = [...dashGrid.children].map((c) => c.dataset.wid);
+    if (order.join() === d.before) return;
+    const byId = new Map(DASH.widgets.map((x) => [x.id, x]));
+    const list = order.map((id) => byId.get(id)).filter(Boolean);
+    DASH.widgets = list; // the grid already shows it; save without rebuilding unless it fails
+    api('PUT', '/api/dashboard', { widgets: list }).then((r) => { DASH.widgets = r.widgets; }).catch((ex) => { toast(ex.message, 'err'); buildGrid(); });
+  });
+}
+/** move DOM nodes and animate every card from its old place to the new one */
+function flipMove(mutate) {
+  const cards = [...dashGrid.children];
+  const first = new Map(cards.map((c) => [c, c.getBoundingClientRect()]));
+  mutate();
+  for (const c of cards) {
+    const a = first.get(c);
+    const b = c.getBoundingClientRect();
+    const dx = a.left - b.left;
+    const dy = a.top - b.top;
+    if (!dx && !dy) continue;
+    c.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: 180, easing: 'cubic-bezier(.2,.7,.3,1)' });
+  }
+}
+
+// ---- add: a gallery of ready-made widgets with a small preview each; pick several, add at once
+const WIDGET_PRESETS = [
+  { id: 'rpm', w: { type: 'stat', metric: 'rpm', title: '분당 요청', w: 1, h: 1 }, look: 'stat', desc: '최근 1분 동안 들어온 요청 수' },
+  { id: 'err5xx', w: { type: 'stat', metric: 'err5xx', title: '5xx 오류율', w: 1, h: 1, warn: 1 }, look: 'stat', desc: '서버 쪽 오류 비율 — 1% 넘으면 경고' },
+  { id: 'p95', w: { type: 'stat', metric: 'p95Ms', title: '응답시간 p95', w: 1, h: 1, warn: 1000 }, look: 'stat', desc: '느린 쪽 5% 요청의 응답시간' },
+  { id: 'requests', w: { type: 'stat', metric: 'requests', title: '요청 수', w: 1, h: 1 }, look: 'stat', desc: '기간 동안의 전체 요청 수' },
+  { id: 'waf', w: { type: 'stat', metric: 'waf', title: 'WAF 차단', w: 1, h: 1 }, look: 'stat', desc: 'WAF·기본 차단·국가 차단으로 막은 요청', need: 'caddy' },
+  { id: 'healthUp', w: { type: 'stat', metric: 'healthUp', title: '정상 서비스 수', w: 1, h: 1 }, look: 'stat', desc: '응답하는 서비스 수 — 응답 없음이 있으면 경고' },
+  { id: 'csBans', w: { type: 'stat', metric: 'csBans', title: 'CrowdSec 차단 IP', w: 1, h: 1 }, look: 'stat', desc: 'CrowdSec이 차단 중인 IP 수', need: 'crowdsec' },
+  { id: 'certDays', w: { type: 'stat', metric: 'certDays', title: '인증서 최단 남은 일수', w: 1, h: 1, warn: 14 }, look: 'stat', desc: '가장 먼저 만료되는 인증서까지 남은 날', need: 'caddy' },
+  { id: 'scatter', w: { type: 'scatter', title: '응답시간 분포', w: 2, h: 2 }, look: 'scatter', desc: '요청 하나하나를 점으로 — 끌어서 고르면 요청 목록' },
+  { id: 'status', w: { type: 'series', metric: 'status', title: '요청 추이 (상태코드별)', w: 2, h: 2 }, look: 'series', desc: '2xx·3xx·4xx·5xx 요청 수의 흐름' },
+  { id: 'latency', w: { type: 'series', metric: 'latency', title: '응답시간 추이', w: 2, h: 2 }, look: 'series', desc: '평균·p95 응답시간의 흐름' },
+  { id: 'bytes', w: { type: 'series', metric: 'bytes', title: '전송량 추이', w: 2, h: 2 }, look: 'series', desc: '보낸 데이터 양의 흐름' },
+  { id: 'wafSeries', w: { type: 'series', metric: 'waf', title: 'WAF 차단 추이', w: 2, h: 2 }, look: 'series', desc: '차단 수의 흐름', need: 'caddy' },
+  { id: 'map', w: { type: 'map', title: '접속 지역', w: 2, h: 3 }, look: 'map', desc: '나라별 요청·거부를 세계지도 위 원 크기로' },
+  { id: 'health', w: { type: 'health', title: '서비스 상태', w: 2, h: 2 }, look: 'health', desc: '서비스마다 서비스 중·느림·응답 없음' },
+  { id: 'topHost', w: { type: 'top', dim: 'host', title: '많이 쓰는 사이트', w: 1, h: 2, limit: 8 }, look: 'top', desc: '요청이 많은 사이트 순위' },
+  { id: 'topPath', w: { type: 'top', dim: 'path', title: '많이 찾는 경로', w: 1, h: 2, limit: 8 }, look: 'top', desc: '요청이 많은 주소(경로) 순위' },
+  { id: 'topCountry', w: { type: 'top', dim: 'country', title: '접속 국가 순위', w: 1, h: 2, limit: 8 }, look: 'top', desc: '요청이 많은 나라 순위' },
+  { id: 'topClient', w: { type: 'top', dim: 'client', title: '접속자 IP 순위', w: 1, h: 2, limit: 8 }, look: 'top', desc: '요청이 많은 접속자 IP 순위' },
+  { id: 'topStatus', w: { type: 'top', dim: 'status', title: '상태코드 순위', w: 1, h: 2, limit: 8 }, look: 'top', desc: '많이 나온 응답 코드' },
+  { id: 'slow', w: { type: 'top', dim: 'slow', title: '느린 요청', w: 1, h: 2, limit: 8 }, look: 'list', desc: '응답이 가장 느렸던 요청' },
+  { id: 'containers', w: { type: 'containers', title: '컨테이너 리소스', w: 1, h: 2 }, look: 'containers', desc: 'Caddy·Authelia·CrowdSec·길목의 CPU·메모리' },
+  { id: 'certs', w: { type: 'certs', title: '인증서 만료', w: 1, h: 2 }, look: 'list', desc: '사이트 인증서의 남은 기간', need: 'caddy' },
+  { id: 'events', w: { type: 'events', title: '최근 이벤트', w: 1, h: 2 }, look: 'list', desc: 'WAF 차단·5xx 오류 (24시간)' },
+];
+/** an existing widget made from this preset (same kind of data) */
+const presetUsed = (p) => DASH.widgets.some((x) => x.type === p.w.type && (x.metric || '') === (p.w.metric || '') && (x.dim || '') === (p.w.dim || '') && !x.host);
+
+/** a tiny drawing of what the widget looks like (theme colors, no data) */
+function widgetPreview(look) {
+  const ink = cssVar('--ink');
+  const faint = `rgb(${ink} / .14)`;
+  const s = sv('svg', { viewBox: '0 0 120 64', class: 'wg-prev', 'aria-hidden': 'true' });
+  const line = (pts, color, w = 1.6) => sv('polyline', { points: pts.map((p) => p.join(',')).join(' '), fill: 'none', stroke: color, 'stroke-width': w, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' });
+  const rect = (x, y, w, h, fill, r = 1.5) => sv('rect', { x, y, width: w, height: h, rx: r, fill });
+  switch (look) {
+    case 'stat':
+      s.append(rect(10, 12, 46, 16, `rgb(${ink} / .55)`, 3), rect(60, 20, 14, 8, faint, 2),
+        line([[10, 52], [24, 46], [36, 49], [50, 40], [64, 43], [78, 34], [92, 38], [110, 28]], C.s1));
+      break;
+    case 'series':
+      s.append(line([[8, 56], [112, 56]], faint, 1), line([[8, 44], [22, 38], [36, 41], [50, 30], [64, 34], [78, 22], [92, 28], [112, 18]], C.s1),
+        line([[8, 52], [22, 50], [36, 51], [50, 46], [64, 48], [78, 42], [92, 45], [112, 40]], C.warn), line([[8, 55], [36, 54], [64, 52], [92, 54], [112, 51]], C.crit));
+      break;
+    case 'scatter': {
+      const pts = [[12, 46], [18, 50], [22, 40], [28, 48], [33, 30], [38, 47], [44, 44], [49, 22], [54, 49], [58, 42], [64, 46], [69, 36], [74, 50], [80, 44], [85, 18], [90, 47], [96, 41], [101, 48], [106, 34], [110, 45]];
+      pts.forEach(([x, y], i) => s.append(sv('circle', { cx: x, cy: y, r: 2.2, fill: i % 7 === 3 ? C.warn : i % 11 === 7 ? C.crit : C.s1, 'fill-opacity': '.8' })));
+      s.append(line([[8, 56], [112, 56]], faint, 1));
+      break;
+    }
+    case 'top':
+      [[0.95, C.s1], [0.7, C.s1], [0.5, C.s1], [0.32, C.s1]].forEach(([f, c], i) => s.append(rect(10, 9 + i * 13, 34, 4, `rgb(${ink} / .35)`), rect(10, 15 + i * 13, 100 * f, 3, c)));
+      break;
+    case 'list':
+      for (let i = 0; i < 4; i++) s.append(rect(10, 10 + i * 13, 8, 8, i === 1 ? C.warn : faint, 4), rect(24, 12 + i * 13, 62 - i * 6, 4, `rgb(${ink} / .35)`), rect(94, 12 + i * 13, 16, 4, faint));
+      break;
+    case 'health':
+      for (let i = 0; i < 8; i++) s.append(sv('circle', { cx: 16 + (i % 4) * 28, cy: 20 + Math.floor(i / 4) * 24, r: 4, fill: i === 5 ? C.crit : i === 2 ? C.warn : C.s1 }), rect(23 + (i % 4) * 28, 18 + Math.floor(i / 4) * 24, 12, 4, faint));
+      break;
+    case 'containers':
+      for (let i = 0; i < 3; i++) s.append(rect(10, 10 + i * 17, 30, 4, `rgb(${ink} / .35)`), rect(10, 17 + i * 17, 100, 4, faint), rect(10, 17 + i * 17, [62, 30, 81][i], 4, [C.s1, C.s3, C.s1][i]));
+      break;
+    case 'map': {
+      const g = sv('g', { transform: 'translate(0 2) scale(0.3333 0.4)' }, sv('path', { d: WORLD_LAND, fill: `rgb(${ink} / .16)` }));
+      s.append(g);
+      [[306, 54, 7, C.s1], [82, 51, 5, C.s1], [190, 40, 4, C.crit], [284, 55, 4, C.crit], [318, 54, 3, C.s1], [150, 102, 3, C.s1]].forEach(([x, y, r, c]) => s.append(sv('circle', { cx: x / 3, cy: y * 0.4 + 2, r, fill: c, 'fill-opacity': '.7' })));
+      break;
+    }
+  }
+  return s;
+}
+
+function openWidgetGallery() {
+  const picked = new Set();
+  const shown = WIDGET_PRESETS.filter((p) => !p.need || use(p.need));
+  const addBtn = h('button', { type: 'button', class: 'btn primary', disabled: true }, '추가');
+  const sync = () => {
+    addBtn.disabled = !picked.size;
+    addBtn.textContent = picked.size ? `선택한 ${picked.size}개 추가` : '추가할 위젯을 고르세요';
+  };
+  const cards = shown.map((p) => {
+    const used = presetUsed(p);
+    const b = h('button', { type: 'button', class: 'wg-card', 'aria-pressed': 'false', title: p.desc },
+      h('span', { class: 'wg-check', 'aria-hidden': 'true' }, '✓'),
+      widgetPreview(p.look),
+      h('b', null, p.w.title),
+      h('span', { class: 'wg-desc' }, p.desc),
+      h('span', { class: 'wg-size' }, `${['', '¼', '½', '¾', '전체'][p.w.w]} 폭`, used ? h('span', { class: 'wg-used' }, '이미 있음') : null));
+    b.addEventListener('click', () => {
+      if (picked.has(p.id)) picked.delete(p.id); else picked.add(p.id);
+      b.setAttribute('aria-pressed', String(picked.has(p.id)));
+      b.classList.toggle('on', picked.has(p.id));
+      sync();
+    });
+    return b;
+  });
+  sync();
+  const custom = h('button', { type: 'button', class: 'btn ghost' }, '직접 구성…');
+  const cancel = h('button', { type: 'button', class: 'btn ghost' }, '취소');
+  const dlg = openDialog({
+    title: '위젯 추가',
+    size: 'wide',
+    body: h('div', { class: 'stack' },
+      h('p', { class: 'muted small' }, '추가할 위젯을 눌러 고르세요 (여러 개 가능). 대시보드 맨 뒤에 붙고, 편집 중에 끌어서 자리를 옮길 수 있습니다.'),
+      h('div', { class: 'wg-grid', role: 'group', 'aria-label': '추가할 위젯' }, cards)),
+    footer: [custom, h('span', { class: 'spacer' }), cancel, addBtn],
+  });
+  custom.addEventListener('click', () => { dlg.close(); openWidgetEditor(null); });
+  cancel.addEventListener('click', () => dlg.close());
+  addBtn.addEventListener('click', () => busy(addBtn, async () => {
+    const add = shown.filter((p) => picked.has(p.id)).map((p) => ({ ...p.w, range: '1h', limit: p.w.limit || 8 }));
+    await saveLayout([...DASH.widgets, ...add]);
+    dlg.close();
+    toast(`위젯 ${add.length}개를 추가했습니다`);
+    const last = DASH.widgets[DASH.widgets.length - 1];
+    const el = last && document.querySelector(`[data-wid="${last.id}"]`);
+    if (el) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }));
+}
+
 async function saveLayout(list) {
   const r = await api('PUT', '/api/dashboard', { widgets: list });
   DASH.widgets = r.widgets;
@@ -601,7 +775,7 @@ let dashEmpty = null; // one notice instead of twelve empty cards while no reque
 function widgetMeta(w) {
   const bits = [];
   if (['stat', 'series', 'scatter', 'top'].includes(w.type) && !(w.type === 'stat' && NO_RANGE_STATS.has(w.metric))) {
-    bits.push(DASH.at ? '선택 기간' : DASH.span ? (DASH_SPANS.find((x) => x[0] === DASH.span) || ['', DASH.span])[1] : rangeName(w.range));
+    bits.push(DASH.at ? '선택 기간' : (DASH_SPANS.find((x) => x[0] === DASH.span) || ['', DASH.span])[1]);
   }
   if (w.host) bits.push(w.host.split('.')[0]);
   return bits.join(' · ');
@@ -614,7 +788,7 @@ function buildGrid() {
   dashGrid.classList.toggle('editing', DASH.edit);
   if (!DASH.widgets.length) {
     const add = h('button', { type: 'button', class: 'btn primary' }, icon('plus'), '위젯 추가');
-    add.addEventListener('click', () => openWidgetEditor(null));
+    add.addEventListener('click', () => openWidgetGallery());
     const reset = h('button', { type: 'button', class: 'btn' }, '기본 구성 불러오기');
     reset.addEventListener('click', () => busy(reset, async () => { const r = await api('PUT', '/api/dashboard', { reset: true }); DASH.widgets = r.widgets; buildGrid(); pollDash(true); }));
     dashGrid.append(h('div', { class: 'empty glass dash-empty' }, h('p', null, '위젯이 없습니다.'), h('div', { class: 'row' }, add, reset)));
@@ -635,21 +809,7 @@ function buildGrid() {
       class: `glass widget w-${w.type}`, 'data-wid': w.id, 'aria-label': w.title, draggable: DASH.edit ? 'true' : null,
       style: { gridColumn: `span ${w.w}`, gridRow: `span ${w.h}` },
     }, h('header', { class: 'w-head' }, h('h2', null, w.title), h('span', { class: 'w-meta' }, widgetMeta(w)), tools), body);
-    if (DASH.edit) {
-      card.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', w.id); card.classList.add('dragging'); });
-      card.addEventListener('dragend', () => card.classList.remove('dragging'));
-      card.addEventListener('dragover', (e) => { e.preventDefault(); card.classList.add('drop'); });
-      card.addEventListener('dragleave', () => card.classList.remove('drop'));
-      card.addEventListener('drop', (e) => {
-        e.preventDefault();
-        card.classList.remove('drop');
-        const from = e.dataTransfer.getData('text/plain');
-        if (!from || from === w.id) return;
-        const list = DASH.widgets.filter((x) => x.id !== from);
-        list.splice(list.findIndex((x) => x.id === w.id), 0, DASH.widgets.find((x) => x.id === from));
-        saveLayout(list);
-      });
-    }
+    if (DASH.edit) dragSortable(card);
     dashGrid.append(card);
     DASH.cards.set(w.id, { card, body, w });
   }
@@ -726,7 +886,7 @@ function renderDashboard(panel) {
   const addBtn = h('button', { type: 'button', class: 'btn primary', hidden: !DASH.edit }, icon('plus'), '위젯 추가');
   const resetBtn = h('button', { type: 'button', class: 'btn ghost', hidden: !DASH.edit }, '기본 구성으로');
   editBtn.addEventListener('click', () => { DASH.edit = !DASH.edit; renderPanel(); });
-  addBtn.addEventListener('click', () => openWidgetEditor(null));
+  addBtn.addEventListener('click', () => openWidgetGallery());
   resetBtn.addEventListener('click', async () => {
     const ok = await confirmDialog({ title: '기본 구성으로 되돌리기', message: '지금 위젯 배치를 지우고 기본 위젯으로 바꿉니다.', okText: '되돌리기', danger: true });
     if (!ok) return;
@@ -738,7 +898,7 @@ function renderDashboard(panel) {
   // live (last N for every widget) ↔ history (a From~To window from the log DB, at most a day)
   const mode = h('div', { class: 'segmented', role: 'radiogroup', 'aria-label': '보기 시점' },
     [['live', '실시간'], ['past', '과거 보기']].map(([v, l]) => h('label', null, h('input', { type: 'radio', name: 'dash-mode', value: v, checked: (v === 'past') === !!DASH.at }), h('span', null, l))));
-  const spanSel = h('select', { class: 'auto-w', 'aria-label': '실시간 기간', title: '모든 위젯을 이 기간으로 봅니다 (「위젯 설정대로」는 위젯마다 정한 기간)', hidden: !!DASH.at },
+  const spanSel = h('select', { class: 'auto-w', 'aria-label': '실시간 기간', title: '모든 위젯을 이 기간으로 봅니다', hidden: !!DASH.at },
     DASH_SPANS.map(([v, l]) => h('option', { value: v, selected: DASH.span === v }, l)));
   spanSel.addEventListener('change', () => {
     DASH.span = spanSel.value;

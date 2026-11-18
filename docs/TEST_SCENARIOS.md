@@ -519,7 +519,7 @@ SecRuleEngine Off`·`942100 "x"`·`abc`, 메모에 개행·백틱·201자 | ID�
 | DASH-06 | p95 | 히스토그램 | 버킷 안 선형 보간 | P2 | ✅ `TestScnDashboard` |
 | DASH-07 | 과거·장기 범위 | `at`, 7d/30d | DB에서 조회 | P2 | ✅ `TestScnDashboard` |
 | DASH-08 | 요청 목록 범위 | `from`·`to` 없음/잘못/아주 큼 | 기본 범위, 넘침 없음 | P1 | ✅ `TestScnDashboard` |
-| DASH-09 | 실시간 전체 기간 | `range` 1m~3h, 모르는 값 | 모든 위젯이 그 기간(위젯 자체 기간 무시), 모르는 값 400 | P1 | ✅ `TestScnDashboard` |
+| DASH-09 | 실시간 전체 기간 | `range` 1m·5m·10m·15m(기본)·30m·1h·2h·3h, 모르는 값 | 모든 위젯이 그 기간(위젯 자체 기간 무시), 모르는 값 400 | P1 | ✅ `TestScnDashboard` |
 | DASH-10 | 과거 From~To | 1시간 창 / 25시간 / 끝이 시작보다 앞 | 창 그대로 DB에서, 실시간 전용 위젯은 liveOnly, 1일 초과·역순 400 | P1 | ✅ `TestScnDashboard` |
 | DASH-11 | 상태코드 필터·점 상세 | 응답시간 분포 점 / `st` 없음·5·2,4·0(모두 숨김) | 점마다 사이트·요청, 요청 목록이 상태 클래스로 걸러짐 | P1 | ✅ `TestScnDashboard` · 화면: 범례 클릭 필터(분포·상태코드별 추이 함께), 점 위에서만 상세, 점 클릭 = 그 요청 (2026-11-17) |
 

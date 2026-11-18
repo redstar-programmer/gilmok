@@ -42,7 +42,7 @@ func (w Widget) dur() time.Duration {
 }
 
 // dashSpans: the whole-dashboard ranges of the live view; the past view takes From~To up to dashMaxWindow.
-var dashSpans = map[string]time.Duration{"1m": time.Minute, "5m": 5 * time.Minute, "10m": 10 * time.Minute, "30m": 30 * time.Minute, "1h": time.Hour, "2h": 2 * time.Hour, "3h": 3 * time.Hour}
+var dashSpans = map[string]time.Duration{"1m": time.Minute, "5m": 5 * time.Minute, "10m": 10 * time.Minute, "15m": 15 * time.Minute, "30m": 30 * time.Minute, "1h": time.Hour, "2h": 2 * time.Hour, "3h": 3 * time.Hour}
 
 const dashMaxWindow = 24 * time.Hour
 
