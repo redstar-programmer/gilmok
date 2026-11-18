@@ -552,9 +552,7 @@ func (a *App) logStreamLoop() {
 			for sc.Scan() {
 				line := sc.Text()
 				if r, ok := parseAccessLine(line); ok {
-					if r.CC == "" && r.Via == "direct" {
-						r.CC = a.geoCountry(r.IP)
-					}
+					a.fillCountry(&r)
 					if r.T > last {
 						a.mon.addReq(r)
 						a.ldb.Req(r)

@@ -27,7 +27,7 @@ import (
 //go:embed web
 var webFS embed.FS
 
-var version = "0.1.12"
+var version = "0.1.13"
 
 func main() {
 	dataDir := env("GM_DATA", "/data")
@@ -168,6 +168,7 @@ func (app *App) handler() http.Handler {
 	api.HandleFunc("GET /api/waf/events", app.getWAFEvents)
 	api.HandleFunc("GET /api/waf/meta", app.getWAFMeta)
 	api.HandleFunc("GET /api/geoip", app.getGeoIP)
+	api.HandleFunc("GET /api/client-env", app.getClientEnv)
 	api.HandleFunc("POST /api/geoip/update", app.postGeoIPUpdate)
 	api.HandleFunc("POST /api/waf/test", app.postWAFTest)
 	api.HandleFunc("GET /api/cfwaf/events", app.getCFEvents)

@@ -91,6 +91,14 @@ func (a *App) geoCountry(ip string) string {
 }
 
 // globalIP: a globally routable address (not LAN, loopback, CGNAT / Tailscale, link-local …).
+// fillCountry: the country of a public client address from the GeoIP database — for direct
+// requests, and for Cloudflare ones when the zone does not send CF-IPCountry (IP Geolocation off).
+func (a *App) fillCountry(r *ReqRec) {
+	if r.CC == "" && (r.Via == "direct" || r.Via == "cf") {
+		r.CC = a.geoCountry(r.IP)
+	}
+}
+
 func globalIP(ip net.IP) bool {
 	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast() {
 		return false

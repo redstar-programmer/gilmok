@@ -132,9 +132,10 @@ function logViewer() {
     exp.href = `/api/logs/export?${p}`;
   };
   const tbody = h('tbody');
+  const why = h('div', { hidden: true });
   const more = h('button', { type: 'button', class: 'btn', hidden: true }, '더 보기');
   const run = (reset) => busy(go, async () => {
-    if (reset) { cursor = 0; tbody.replaceChildren(); }
+    if (reset) { cursor = 0; tbody.replaceChildren(); why.hidden = true; }
     syncFilters();
     const p = params();
     p.set('limit', '100');
@@ -144,6 +145,8 @@ function logViewer() {
       const r = await api('GET', `${isReq ? '/api/logs/requests' : '/api/logs/events'}?${p}`);
       const rows = isReq ? r.requests : r.events;
       for (const x of rows) tbody.append(...(isReq ? reqRow(x) : eventRow(x)));
+      const hidden = isReq ? tbody.querySelectorAll('.client-cell.muted').length : 0;
+      if (hidden && why.hidden) { fill(why, clientWhyBox(hidden, tbody.querySelectorAll('tr').length)); why.hidden = false; }
       cursor = rows.length ? rows[rows.length - 1].id : cursor;
       more.hidden = rows.length < 100;
       if (reset && !rows.length) tbody.append(h('tr', null, h('td', { colspan: '7', class: 'muted' }, '조건에 맞는 기록이 없습니다.')));
@@ -165,7 +168,7 @@ function logViewer() {
   run(true);
   return h('section', { class: 'glass card stack' },
     h('div', { class: 'row' }, catNav, h('span', { class: 'hint' }, (LOG_CATS.find((c) => c.key === LOGS.cat) || {}).desc || '')),
-    filters, quick, table, h('div', { class: 'row' }, more), results);
+    filters, quick, why, table, h('div', { class: 'row' }, more), results);
 }
 
 function eventRow(e) {

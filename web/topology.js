@@ -749,8 +749,11 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
     b.addEventListener('click', () => { store('gm.topoBlind', on ? '0' : '1'); repaint(); });
     return h('div', { class: 'seg-mini' }, b);
   })();
+  // controls (left) and the read-only summary (right, plain text) are kept apart so the counts
+  // do not look like more buttons
   const sum = h('div', { class: 'topo-sum' },
-    modeSel, zoomCtl, blindBtn,
+    h('div', { class: 'topo-tools', role: 'toolbar', 'aria-label': '구성도 보기' }, modeSel, zoomCtl, blindBtn),
+    h('div', { class: 'topo-stats', role: 'group', 'aria-label': '현황' }, h('span', { class: 'topo-stats-label' }, '현황'),
     h('span', { class: 'badge' }, `서비스 ${en.length}/${all.length}`),
     (() => { const hs = all.map(healthOf).filter(Boolean); const down = hs.filter((x) => x.st === 'down').length; if (!hs.length) return null; if (S.caddyRun && S.caddyRun.down) return h('span', { class: 'badge danger' }, `✗ Caddy 중단 — 접속 불가 ${down}`); return h('span', { class: `badge ${down ? 'danger' : 'ok'}` }, down ? `✗ 응답 없음 ${down}` : `● 모두 정상 ${hs.length}`); })(),
     h('span', { class: 'badge public' }, `공개 ${en.filter((s) => s.exposure === 'public').length}`),
@@ -758,7 +761,7 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
     use('authelia') ? h('span', { class: 'badge accent' }, icon('shield'), `Authelia ${authN}`) : null,
     wafN ? h('span', { class: 'badge danger' }, `WAF ${wafN}`) : null,
     set.crowdsecEnabled ? h('span', { class: 'badge danger' }, set.crowdsecSync ? 'CrowdSec → Cloudflare' : 'CrowdSec (분석만)') : null,
-    set.cfAsnRule ? h('span', { class: 'badge' }, icon('cloud', 'fill cloud-orange'), `ISP(ASN) 규칙 · ${CF_ACTION[set.cfAsnAction] || set.cfAsnAction}`) : null);
+    set.cfAsnRule ? h('span', { class: 'badge' }, icon('cloud', 'fill cloud-orange'), `ISP(ASN) 규칙 · ${CF_ACTION[set.cfAsnAction] || set.cfAsnAction}`) : null));
   const leg = (cls, text) => h('span', { class: 'leg' }, h('i', { class: cls, 'aria-hidden': 'true' }), text);
   const legend = h('div', { class: 'topo-legend', 'aria-label': '범례' },
     use('cloudflare') ? leg('l-orange', 'Proxied (Cloudflare 경유)') : null, leg('l-gray', use('cloudflare') ? 'DNS only (직접 연결)' : '직접 연결'), privOn() ? leg('l-ts', use('tailscale') ? 'Tailscale' : '사설 경로') : null,

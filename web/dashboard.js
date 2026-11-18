@@ -27,9 +27,15 @@ for (const [k, v] of Object.entries({ muted: '--muted', ink: '--fg', ink2: '--fg
 Object.defineProperty(C, 'grid', { get: () => `rgb(${cssVar('--ink')} / .07)`, enumerable: true });
 Object.defineProperty(C, 'axis', { get: () => `rgb(${cssVar('--ink')} / .16)`, enumerable: true });
 const STATUS_CLASS = [
-  { key: 's2', name: '2xx', color: C.s1 }, { key: 's3', name: '3xx', color: C.neutral },
-  { key: 's4', name: '4xx', color: C.warn }, { key: 's5', name: '5xx', color: C.crit },
+  { key: 's2', name: '2xx', color: C.s1, title: '성공', desc: '요청을 정상적으로 처리했습니다.', ex: '200 정상 · 204 내용 없음 · 206 일부(동영상·큰 파일 이어 받기)' },
+  { key: 's3', name: '3xx', color: C.neutral, title: '이동 · 캐시', desc: '다른 주소로 보내거나(리다이렉트), 브라우저에 있는 것을 그대로 쓰라고 알렸습니다. 대부분 정상입니다.', ex: '301·302 다른 주소로 이동(예: 로그인 화면) · 304 바뀐 것 없음(캐시 사용)' },
+  { key: 's4', name: '4xx', color: C.warn, title: '요청 쪽 문제 · 거부', desc: '없는 주소, 로그인 필요, 차단처럼 요청한 쪽 사정으로 처리하지 않았습니다. 스캐너·봇이 많으면 늘어납니다.', ex: '401 로그인 필요 · 403 거부(기본 차단·WAF·국가 차단) · 404 없는 주소 · 429 너무 많은 요청' },
+  { key: 's5', name: '5xx', color: C.crit, title: '서버 쪽 오류', desc: '대상 서비스가 꺼져 있거나 오류를 냈습니다. 계속 보이면 서비스 상태를 확인하세요.', ex: '500 서비스 내부 오류 · 502 대상 서비스 연결 실패 · 503 사용 불가 · 504 응답 시간 초과' },
 ];
+/** what a status class means — for the legend's hover help and the map's per-country details */
+function statusHelp(c) {
+  return h('div', { class: 'st-help' }, h('b', null, `${c.name} — ${c.title}`), h('p', null, c.desc), h('p', { class: 'muted small' }, c.ex));
+}
 const statusColor = (code) => (code >= 500 ? C.crit : code >= 400 ? C.warn : code >= 300 ? C.neutral : C.s1);
 
 /** status classes hidden by the dashboard's status filter (the clickable legends; remembered per browser) */
@@ -41,14 +47,14 @@ const stParam = () => (DASH_HIDE_ST.size ? STATUS_CLASS.filter((c) => !DASH_HIDE
 function statusLegend(counts) {
   return h('div', { class: 'dlegend st-filter', role: 'group', 'aria-label': '상태코드 필터 — 눌러서 숨기기·보이기' }, STATUS_CLASS.map((c) => {
     const off = DASH_HIDE_ST.has(c.key);
-    const b = h('button', { type: 'button', class: off ? 'off' : '', 'aria-pressed': String(!off), title: off ? `${c.name} 다시 보이기` : `${c.name} 숨기기 (응답시간 분포·상태코드별 추이)` },
+    const b = h('button', { type: 'button', class: off ? 'off' : '', 'aria-pressed': String(!off), 'aria-label': `${c.name} ${c.title}` },
       h('i', { style: { background: c.color } }), c.name, counts ? h('b', null, fmtNum(counts[c.key] || 0)) : null);
     b.addEventListener('click', () => {
       if (off) DASH_HIDE_ST.delete(c.key); else DASH_HIDE_ST.add(c.key);
       try { localStorage.setItem('gm.dashHideSt', JSON.stringify([...DASH_HIDE_ST])); } catch { /* private mode */ }
       paintAll();
     });
-    return b;
+    return hoverTip(b, () => h('div', null, statusHelp(c), h('p', { class: 'muted small st-help-act' }, off ? '누르면 다시 보입니다' : '누르면 그래프에서 숨깁니다')));
   }));
 }
 
@@ -61,6 +67,7 @@ const WIDGET_TYPES = {
   containers: { name: '컨테이너 리소스', desc: 'CPU·메모리 사용량과 추이', def: { w: 1, h: 2 } },
   certs: { name: '인증서 만료', desc: 'Caddy가 내보내는 인증서의 남은 기간', def: { w: 1, h: 1 } },
   events: { name: '최근 이벤트', desc: 'WAF 차단·5xx 오류 (24시간)', def: { w: 1, h: 1 } },
+  map: { name: '접속 지역 (세계지도)', desc: '나라별 요청·거부를 지도 위 원 크기로', def: { w: 2, h: 3, range: '1h' } },
 };
 const STAT_METRICS = [
   ['rpm', '분당 요청 (최근 1분)'], ['requests', '요청 수 (기간 합계)'], ['err5xx', '5xx 오류율'], ['err4xx', '4xx 비율'],
@@ -383,9 +390,11 @@ const RENDER = {
           h('b', { class: 'dl-num' }, fmtNum(r.n))),
         h('div', { class: 'dl-bar' }, h('i', { style: { width: `${(r.n / max) * 100}%` } })),
         h('div', { class: 'dl-sub' }, `평균 ${fmtMs(r.avgMs)}`, r.errPct ? h('span', { class: 'errtxt' }, ` · 5xx ${r.errPct}%`) : null))))
-        : h('p', { class: 'muted' }, w.dim === 'client' || w.dim === 'country' ? '아직 접속자 주소가 기록된 요청이 없습니다 — Docker Desktop에서는 Proxied 사이트(Cloudflare 경유)의 요청만 접속자를 알 수 있습니다' : '요청 없음'),
+        : w.dim === 'client' || w.dim === 'country' ? h('div', { class: 'stack' }, h('p', { class: 'muted' }, '아직 접속자 주소가 기록된 요청이 없습니다'), clientWhyBox(0, 0)) : h('p', { class: 'muted' }, '요청 없음'),
       d.partial ? h('p', { class: 'hint' }, '최근 요청 2만 건 기준') : null);
   },
+
+  map(body, w, d) { geoMapWidget(body, w, d, C, STATUS_CLASS); },
 
   health(body, w, d) {
     const list = d.services || [];
@@ -505,8 +514,8 @@ function openWidgetEditor(existing) {
     const t = cur();
     if (changedType) { const d = WIDGET_TYPES[t].def; wSel.value = String(d.w); hSel.value = String(d.h); }
     f.statM.hidden = t !== 'stat'; f.serM.hidden = t !== 'series'; f.dim.hidden = t !== 'top'; f.limit.hidden = t !== 'top';
-    f.range.hidden = !['stat', 'series', 'scatter', 'top'].includes(t) || (t === 'stat' && NO_RANGE_STATS.has(statM.value));
-    f.host.hidden = !['stat', 'series', 'scatter', 'top'].includes(t) || (t === 'stat' && ['csBans', 'healthUp', 'certDays'].includes(statM.value));
+    f.range.hidden = !['stat', 'series', 'scatter', 'top', 'map'].includes(t) || (t === 'stat' && NO_RANGE_STATS.has(statM.value));
+    f.host.hidden = !['stat', 'series', 'scatter', 'top', 'map'].includes(t) || (t === 'stat' && ['csBans', 'healthUp', 'certDays'].includes(statM.value));
     f.warn.hidden = t !== 'stat' || ['csBans', 'healthUp'].includes(statM.value);
     f.ctr.hidden = t !== 'containers';
     const big = (v) => ['6h', '24h', '7d', '30d'].includes(v);

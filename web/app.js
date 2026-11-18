@@ -651,6 +651,13 @@ function renderTopbar() {
     b.addEventListener('click', () => gotoTab('logs'));
     area.append(b);
   }
+  if (!st.setupDone && can('config') && can('system')) {
+    const b = h('button', { type: 'button', class: 'top-pill setup' }, '설정 마법사');
+    b.addEventListener('click', openSetupChooser);
+    area.append(hoverTip(b, () => h('div', { class: 'tip-body' },
+      h('b', null, '처음 설정이 아직 끝나지 않았습니다'),
+      h('p', null, '눌러서 빠른 설정 또는 설정 마법사를 다시 엽니다. 설정을 마치거나 「다시 묻지 않기」를 고르면 이 버튼은 사라집니다 (그 뒤에는 설정 탭 위쪽 「설정 마법사 열기」).'))));
+  }
   const up = st.updates || {};
   if (up.count > 0) {
     const b = h('button', { type: 'button', class: 'top-pill update' }, `↑ 업데이트 ${up.count}건`);
@@ -669,13 +676,32 @@ function renderTopbar() {
  * hoverTip(trigger, render) → wrapper. A small popover under the trigger on mouse hover and on
  * keyboard focus (Esc closes it); render() builds the content each time, so it is always current.
  */
+/** slide a shown popover sideways so it stays inside whatever clips it (a widget body, the
+ * viewport); the arrow keeps pointing at the trigger (--tip-dx moves the box, not the arrow) */
+function tipKeepInside(tip) {
+  tip.style.setProperty('--tip-dx', '0px');
+  let box = { left: 0, right: document.documentElement.clientWidth };
+  for (let el = tip.parentElement; el && el !== document.body; el = el.parentElement) {
+    const ov = getComputedStyle(el).overflowX;
+    if (ov !== 'visible') { const r = el.getBoundingClientRect(); box = { left: Math.max(box.left, r.left), right: Math.min(box.right, r.right) }; break; }
+  }
+  const r = tip.getBoundingClientRect();
+  const pad = 6;
+  let dx = 0;
+  if (r.left < box.left + pad) dx = box.left + pad - r.left;
+  else if (r.right > box.right - pad) dx = box.right - pad - r.right;
+  // never move the arrow off the box (half the box width minus the corner)
+  dx = Math.max(-(r.width / 2 - 14), Math.min(r.width / 2 - 14, dx));
+  tip.style.setProperty('--tip-dx', `${Math.round(dx)}px`);
+}
+
 function hoverTip(trigger, render) {
   const id = uid('tip');
   const tip = h('div', { class: 'hover-tip', role: 'tooltip', id, hidden: true });
   const wrap = h('span', { class: 'tip-wrap' }, trigger, tip);
   trigger.setAttribute('aria-describedby', id);
   let t = 0;
-  const show = () => { clearTimeout(t); tip.replaceChildren(render()); tip.hidden = false; };
+  const show = () => { clearTimeout(t); tip.replaceChildren(render()); tip.hidden = false; tipKeepInside(tip); };
   const hide = () => { clearTimeout(t); t = setTimeout(() => { tip.hidden = true; }, 120); };
   wrap.addEventListener('mouseenter', show);
   wrap.addEventListener('mouseleave', hide);
@@ -1200,7 +1226,14 @@ function openServiceDrawer(svc, preset) {
   // wrap the input with the domain suffix while keeping label/aria-describedby on the input itself
   const subGroup = h('div', { class: 'input-group' });
   sub.replaceWith(subGroup);
-  subGroup.append(sub, h('span', { class: `addon ${st.domain ? '' : 'warn-text'}`, 'aria-hidden': 'true', title: st.domain ? '' : '설정 탭 › 도메인에서 먼저 정하세요' }, st.domain ? `.${st.domain}` : '.(도메인 미설정)'));
+  const suffix = h('span', { class: 'addon', 'aria-hidden': 'true' }, st.domain ? `.${st.domain}` : '.도메인');
+  subGroup.append(sub, suffix);
+  // no domain yet (closed the setup, or a new install): ask for it here instead of sending the user away
+  const domIn = st.domain ? null : h('input', { type: 'text', autocomplete: 'off', spellcheck: 'false', placeholder: '예: example.com', class: 'mono' });
+  const domField = domIn ? field('도메인', domIn, '이 길목의 모든 서비스가 쓰는 루트 도메인입니다. 한 번 정하면 다음부터는 묻지 않습니다 (설정 탭 › 도메인에서 바꿀 수 있음).') : null;
+  if (domIn) {
+    domIn.addEventListener('input', () => { suffix.textContent = `.${domIn.value.trim().toLowerCase().replace(/^\.+|\.+$/g, '') || '도메인'}`; });
+  }
 
   const up = h('input', { type: 'text', value: s.upstream, autocomplete: 'off', spellcheck: 'false', placeholder: 'immich_server:2283', class: 'mono' });
   const upField = field('대상 (upstream)', up, settings().caddyMode && settings().caddyMode !== 'docker'
@@ -1272,7 +1305,7 @@ function openServiceDrawer(svc, preset) {
 
   const errEl = h('p', { class: 'form-error', role: 'alert', hidden: true });
   const form = h('form', { class: 'stack', novalidate: true },
-    errEl, subField, noCaddy, upField, exposure, publicBox, tsNote, authBox, wafBox, opts, notesField, advanced);
+    errEl, domField, subField, noCaddy, upField, exposure, publicBox, tsNote, authBox, wafBox, opts, notesField, advanced);
 
   const sync = () => {
     const isPublic = exposure.get() === 'public';
@@ -1338,8 +1371,22 @@ function openServiceDrawer(svc, preset) {
       sub.focus();
       return;
     }
+    const domain = domIn ? domIn.value.trim().toLowerCase().replace(/^\.+|\.+$/g, '') : '';
+    if (domIn && !domain) {
+      domIn.setAttribute('aria-invalid', 'true');
+      errEl.textContent = '도메인을 입력하세요 (예: example.com)';
+      errEl.hidden = false;
+      domIn.focus();
+      return;
+    }
     try {
-      await busy(save, () => (isNew ? api('POST', '/api/services', body) : api('PUT', `/api/services/${encodeURIComponent(s.id)}`, body)));
+      await busy(save, async () => {
+        if (domain) { // the settings check validates it (same rules as 설정 탭 › 도메인)
+          await api('PUT', '/api/settings', { ...settings(), domain });
+          await refreshState();
+        }
+        return isNew ? api('POST', '/api/services', body) : api('PUT', `/api/services/${encodeURIComponent(s.id)}`, body);
+      });
       dirty = false;
       d.close();
       toast(`${fqdn(body.subdomain)} 저장됨 — 적용 버튼으로 반영하세요`);

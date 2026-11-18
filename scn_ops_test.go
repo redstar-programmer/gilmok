@@ -138,10 +138,10 @@ func TestScnHealthProbe(t *testing.T) {
 func TestScnDashboard(t *testing.T) {
 	f := newFullApp(t)
 	boss := f.admin(t)
-	// DASH-01: default 12 widgets
+	// DASH-01: default 13 widgets
 	m := boss.must(200, "GET", "/api/dashboard", "")
 	ws := m["widgets"].([]any)
-	if len(ws) != 12 {
+	if len(ws) != 13 {
 		t.Fatalf("DASH-01: %d", len(ws))
 	}
 	// DASH-02: save 5 in a new order; DASH-05 an unknown type is refused
@@ -160,8 +160,8 @@ func TestScnDashboard(t *testing.T) {
 		t.Fatal("DASH-03: reset kept a custom layout")
 	}
 	m = boss.must(200, "GET", "/api/dashboard", "")
-	if len(m["widgets"].([]any)) != 12 {
-		t.Fatal("DASH-03: reset does not serve the default 12 widgets")
+	if len(m["widgets"].([]any)) != 13 {
+		t.Fatal("DASH-03: reset does not serve the default 13 widgets")
 	}
 	// DASH-04 / DASH-05: one call answers every widget; a broken one does not break the rest
 	now := time.Now().UnixMilli()

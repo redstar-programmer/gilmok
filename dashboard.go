@@ -47,7 +47,7 @@ var dashSpans = map[string]time.Duration{"1m": time.Minute, "5m": 5 * time.Minut
 const dashMaxWindow = 24 * time.Hour
 
 var (
-	widgetTypes   = map[string]bool{"stat": true, "series": true, "scatter": true, "top": true, "health": true, "containers": true, "certs": true, "events": true}
+	widgetTypes   = map[string]bool{"stat": true, "series": true, "scatter": true, "top": true, "health": true, "containers": true, "certs": true, "events": true, "map": true}
 	statMetrics   = map[string]bool{"rpm": true, "requests": true, "err5xx": true, "err4xx": true, "avgMs": true, "p95Ms": true, "bytes": true, "waf": true, "csBans": true, "healthUp": true, "certDays": true}
 	seriesMetrics = map[string]bool{"requests": true, "status": true, "latency": true, "bytes": true, "waf": true}
 	topDims       = map[string]bool{"host": true, "path": true, "status": true, "client": true, "country": true, "slow": true}
@@ -63,6 +63,7 @@ func defaultDashboard() []Widget {
 		{Type: "scatter", Title: "응답시간 분포", Range: "15m", W: 2, H: 2},
 		{Type: "series", Title: "요청 추이 (상태코드별)", Metric: "status", Range: "1h", W: 2, H: 2},
 		{Type: "health", Title: "서비스 상태", W: 2, H: 2},
+		{Type: "map", Title: "접속 지역", Range: "1h", W: 2, H: 3},
 		{Type: "top", Title: "많이 쓰는 사이트", Dim: "host", Range: "1h", Limit: 8, W: 1, H: 2},
 		{Type: "containers", Title: "컨테이너 리소스", W: 1, H: 2},
 		{Type: "series", Title: "응답시간 추이", Metric: "latency", Range: "1h", W: 2, H: 2},
@@ -434,6 +435,97 @@ func (a *App) topData(wd Widget) map[string]any {
 	return out
 }
 
+// ---------------------------------------------------------------- map: where requests come from
+
+// geoRow: requests from one country; Blocked = refused at the door (403 / 429: basic block, WAF,
+// country block, rate limit).
+type geoRow struct {
+	CC      string    `json:"cc"`
+	N       int       `json:"n"`
+	Blocked int       `json:"blocked"`
+	St      [4]int    `json:"st"`    // 2xx, 3xx, 4xx, 5xx
+	IPs     int       `json:"ips"`   // distinct client addresses
+	Hosts   []hostCnt `json:"hosts"` // the sites they asked for, most first (up to 3)
+}
+
+type hostCnt struct {
+	Host string `json:"host"`
+	N    int    `json:"n"`
+}
+
+func stIndex(s int) int { return min(max(s/100, 2), 5) - 2 }
+
+// topHosts: the 3 sites a country used most.
+func topHosts(m map[string]int) []hostCnt {
+	out := make([]hostCnt, 0, len(m))
+	for h, n := range m {
+		out = append(out, hostCnt{h, n})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].N > out[j].N || out[i].N == out[j].N && out[i].Host < out[j].Host })
+	if len(out) > 3 {
+		out = out[:3]
+	}
+	return out
+}
+
+func blockedStatus(s int) bool { return s == 403 || s == 429 }
+
+// mapData: countries plus how many requests had a usable client address at all ("via" counts), so
+// the widget can say why the map is empty (Docker rewrites the address) instead of looking broken.
+func (a *App) mapData(wd Widget) map[string]any {
+	since := time.Now().Add(-wd.dur()).UnixMilli()
+	m := map[string]*geoRow{}
+	hosts := map[string]map[string]int{}
+	ips := map[string]map[string]bool{}
+	via := map[string]int{}
+	total := 0
+	for _, r := range a.mon.recent(since) {
+		if wd.Host != "" && r.Host != wd.Host {
+			continue
+		}
+		total++
+		via[r.Via]++
+		if r.CC == "" {
+			continue
+		}
+		x := m[r.CC]
+		if x == nil {
+			x = &geoRow{CC: r.CC}
+			m[r.CC] = x
+			hosts[r.CC], ips[r.CC] = map[string]int{}, map[string]bool{}
+		}
+		x.N++
+		x.St[stIndex(r.Status)]++
+		hosts[r.CC][r.Host]++
+		ips[r.CC][r.IP] = true
+		if blockedStatus(r.Status) {
+			x.Blocked++
+		}
+	}
+	rows := make([]geoRow, 0, len(m))
+	for cc, x := range m {
+		x.Hosts, x.IPs = topHosts(hosts[cc]), len(ips[cc])
+		rows = append(rows, *x)
+	}
+	out := mapOut(rows, via, total)
+	if a.mon.ringSpan() < wd.dur() {
+		out["partial"] = true
+	}
+	return out
+}
+
+func mapOut(rows []geoRow, via map[string]int, total int) map[string]any {
+	sort.Slice(rows, func(i, j int) bool { return rows[i].N > rows[j].N || rows[i].N == rows[j].N && rows[i].CC < rows[j].CC })
+	if len(rows) > 200 {
+		rows = rows[:200]
+	}
+	if via[""] > 0 { // lines from before the field existed
+		via["unknown"] += via[""]
+		delete(via, "")
+	}
+	return map[string]any{"countries": rows, "via": via, "total": total}
+}
+
 func (m *Monitor) ringSpan() time.Duration {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -633,6 +725,8 @@ func (a *App) postDashData(w http.ResponseWriter, r *http.Request) {
 				data[wd.ID] = a.dbScatter(ctx, wd, end)
 			case "top":
 				data[wd.ID] = a.dbTop(ctx, wd, end)
+			case "map":
+				data[wd.ID] = a.dbMap(ctx, wd, end)
 			case "events":
 				data[wd.ID] = a.dbEvents(ctx, end)
 			default:
@@ -654,6 +748,8 @@ func (a *App) postDashData(w http.ResponseWriter, r *http.Request) {
 			data[wd.ID] = a.scatterData(wd)
 		case "top":
 			data[wd.ID] = a.topData(wd)
+		case "map":
+			data[wd.ID] = a.mapData(wd)
 		case "health":
 			data[wd.ID] = a.healthData()
 		case "containers":

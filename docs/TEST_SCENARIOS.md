@@ -783,6 +783,8 @@ go test -count=1 -run 'Groups|Bulk' ./...   # 일부
 | GEO-01 | 접속자 IP·국가 | Proxied(Cloudflare 헤더) / mTLS / Tor·XX / 리눅스 직접 / Docker Desktop 게이트웨이 / Tailscale / 내부망 / 헤더가 IP 아님 | 출처(cf·direct·hidden·tailnet·lan)와 국가, 게이트웨이는 「알 수 없음」 | P1 | ✅ `TestGeoClientOf` · 실제 DB-IP DB로 길목 조회 KR·US·JP 확인 (2026-11-18) |
 | GEO-02 | Caddy 국가 차단 생성 | 준비 안 됨 / 허용·차단 방식 / Proxied·사설 사이트 / 범위 / 가져오기 | 준비될 때만 스니펫, DNS only 공개 사이트에만 import, 내부 주소 제외, 가져오기 때 버림 | P1 | ✅ `TestGeoCaddySnippet` · 실제 Caddy(모듈 포함): validate 통과, 허용 KR JP → KR·JP 200 / US 403(X-Gilmok-Block: geo) / Tailscale·내부망·Docker 200, 차단 US → US만 403 (2026-11-18) |
 | GEO-03 | 설정·로그 DB | 방식·국가 코드 검사 / 예전 DB에 열 추가 / 국가별 상위 | 잘못된 값 400, 예전 행 유지, cc·via 저장·조회 | P1 | ✅ `TestGeoSettingsAndLogDB` · 실행 중 길목: 시작 때 DB 자동 다운로드, 저장 시 적용 대기, Caddy 미준비 사유가 적용 미리보기에 (2026-11-18) |
+| GEO-04 | 접속 지역 지도 위젯 | 나라별 요청·거부(403·429)·상태코드별·IP 수·많이 들어온 사이트, 출처별 개수(cf·direct·hidden·lan), 실시간·과거(DB), 기본 배치에 포함, DB 없으면 Cloudflare 요청 국가 그대로 | 실시간·DB 같은 결과 | P1 | ✅ `TestGeoMapWidget` · 화면: 지도·원·말풍선(상태코드 설명·사이트), 「알 수 없음 — 왜?」 설명, 날짜변경선 가로선 없음 (2026-11-18) |
+| GEO-05 | 접속자 주소가 가려지는 이유 (환경별) | Docker Desktop / rootless / Swarm ingress / host 네트워크 / bridge IPv6 꺼짐·켜짐 / Caddy가 Docker 밖 / Caddy 미사용 | `GET /api/client-env`의 kind·ipv6 → 「왜 그런가요?」와 국가 차단 경고가 그 환경의 원인·해결만 표시 (Desktop·rootless·Swarm = 아무것도 못 막음, bridge IPv6 꺼짐 = IPv6만 못 막음) | P1 | ✅ `TestClientIPEnv` |
 | E2E-01~22 | 실제 처음 설치 | 실제 Docker: 언어 → 관리자 → Caddy(네트워크 지정·내부 인증서) → Authelia(네트워크 비움) → CrowdSec → 서비스 → 점검 → 적용 → 실제 접속 → CrowdSec 재시작 → 보류 | 전부 통과 | P1 | ✅ 24/24 (2026-11-18, 실제 Docker) |
 | E2E-P2-01~14 | 예전 Caddyfile → 관리형 스택 | PC 파일 가져오기 → CA 없이 적용(mTLS 보류) → 잘못된 PEM → CA 넣고 적용 → 클라이언트 인증서 없는 접속 거부 → 점검 | 전부 통과 | P1 | ✅ 14/14 (2026-11-18, 실제 Docker) |
 

@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // GEO-01: who sent a request — Cloudflare's headers on Proxied sites, the address Caddy saw
@@ -141,5 +143,130 @@ func TestGeoSettingsAndLogDB(t *testing.T) {
 	top, err := l.TopRequests(context.Background(), "country", 0, 1<<62, "", 5)
 	if err != nil || len(top) != 1 || top[0].Key != "KR" {
 		t.Fatalf("GEO-03 top country: %v %+v", err, top)
+	}
+}
+
+// GEO-04: the world map widget — countries with refusals, how many requests had a usable client
+// address (so the widget can explain an empty map), live and from the log database; a Cloudflare
+// request without CF-IPCountry still gets a country when the database knows the address.
+func TestGeoMapWidget(t *testing.T) {
+	f := newFullApp(t)
+	boss := f.admin(t)
+	now := time.Now().UnixMilli()
+	recs := []ReqRec{
+		{T: now - 1000, Host: "a.example.com", Status: 200, IP: "203.0.113.7", CC: "KR", Via: "cf"},
+		{T: now - 2000, Host: "a.example.com", Status: 403, IP: "198.51.100.1", CC: "US", Via: "direct"},
+		{T: now - 3000, Host: "a.example.com", Status: 200, IP: "198.51.100.1", CC: "US", Via: "direct"},
+		{T: now - 4000, Host: "b.example.com", Status: 429, IP: "198.51.100.2", CC: "US", Via: "direct"},
+		{T: now - 5000, Host: "b.example.com", Status: 200, IP: "172.18.0.1", Via: "hidden"},
+		{T: now - 6000, Host: "b.example.com", Status: 200, IP: "192.168.1.5", Via: "lan"},
+	}
+	for _, r := range recs {
+		f.app.mon.addReq(r)
+		f.app.ldb.Req(r)
+	}
+	check := func(tag string, d map[string]any) {
+		t.Helper()
+		var got struct {
+			Countries []geoRow       `json:"countries"`
+			Via       map[string]int `json:"via"`
+			Total     int            `json:"total"`
+		}
+		b, _ := json.Marshal(d)
+		_ = json.Unmarshal(b, &got)
+		if got.Total != 6 || len(got.Countries) != 2 || got.Countries[0].CC != "US" || got.Countries[0].N != 3 || got.Countries[0].Blocked != 2 || got.Countries[1].CC != "KR" || got.Countries[1].Blocked != 0 {
+			t.Errorf("GEO-04 %s countries: %s", tag, b)
+		}
+		us := got.Countries[0]
+		if us.St != [4]int{1, 0, 2, 0} || us.IPs != 2 || len(us.Hosts) != 2 || us.Hosts[0].Host != "a.example.com" || us.Hosts[0].N != 2 {
+			t.Errorf("GEO-04 %s details: %+v", tag, us)
+		}
+		if got.Via["cf"] != 1 || got.Via["direct"] != 3 || got.Via["hidden"] != 1 || got.Via["lan"] != 1 {
+			t.Errorf("GEO-04 %s via: %s", tag, b)
+		}
+	}
+	b, _ := json.Marshal(map[string]any{"widgets": []Widget{{ID: "m", Type: "map"}}, "range": "1h"})
+	m := boss.must(200, "POST", "/api/dash/data", string(b))
+	check("live", m["data"].(map[string]any)["m"].(map[string]any))
+	waitFlush(t, f.app.ldb, int64(len(recs)))
+	b, _ = json.Marshal(map[string]any{"widgets": []Widget{{ID: "m", Type: "map"}}, "from": now - 3600_000, "to": now + 1000})
+	m = boss.must(200, "POST", "/api/dash/data", string(b))
+	d := m["data"].(map[string]any)["m"].(map[string]any)
+	if d["history"] != true {
+		t.Error("GEO-04: past window did not read the log database")
+	}
+	check("db", d)
+
+	// the default dashboard has the map
+	found := false
+	for _, w := range defaultDashboard() {
+		found = found || w.Type == "map"
+	}
+	if !found {
+		t.Error("GEO-04: default dashboard without the map")
+	}
+	// no database → Cloudflare request without a country stays without one, nothing else is touched
+	r := ReqRec{IP: "8.8.8.8", Via: "cf"}
+	f.app.fillCountry(&r)
+	l := ReqRec{IP: "192.168.1.5", Via: "lan"}
+	f.app.fillCountry(&l)
+	if r.CC != "" || l.CC != "" {
+		t.Errorf("GEO-04 fillCountry without db: %+v %+v", r, l)
+	}
+}
+
+// GEO-05: why client addresses are hidden on this server — Docker Desktop, rootless, Swarm,
+// host network, a bridge network with / without IPv6, Caddy outside Docker.
+func TestClientIPEnv(t *testing.T) {
+	type env struct{ os, sec, mode, swarm, nets, v6 string }
+	run := func(e env) ClientIPEnv {
+		installFakeDocker(t, func(args []string, _ []byte) (string, error) {
+			switch {
+			case args[0] == "info":
+				return `"` + e.os + `"|` + e.sec, nil
+			case args[0] == "inspect":
+				return e.mode + "|" + e.swarm + "|" + e.nets, nil
+			case args[0] == "network":
+				return e.v6, nil
+			}
+			return "", nil
+		})
+		return detectClientIPEnv(context.Background(), "caddy")
+	}
+	nets := `{"proxy":{},"bridge":{}}`
+	for _, c := range []struct {
+		name string
+		e    env
+		kind string
+		v6   bool
+	}{
+		{"desktop", env{os: "Docker Desktop", sec: `["name=seccomp"]`}, "desktop", false},
+		{"rootless", env{os: "Ubuntu 24.04", sec: `["name=seccomp","name=rootless"]`}, "rootless", false},
+		{"host network", env{os: "Ubuntu 24.04", sec: `[]`, mode: "host", nets: `{"host":{}}`}, "hostnet", false},
+		{"swarm", env{os: "Ubuntu 24.04", sec: `[]`, mode: "proxy", swarm: "abc", nets: nets}, "ingress", false},
+		{"bridge without ipv6", env{os: "Ubuntu 24.04", sec: `[]`, mode: "proxy", nets: nets, v6: "false"}, "bridge", false},
+		{"bridge with ipv6", env{os: "Debian GNU/Linux 12", sec: `[]`, mode: "proxy", nets: nets, v6: "true"}, "bridge", true},
+	} {
+		got := run(c.e)
+		if got.Kind != c.kind || got.IPv6 != c.v6 {
+			t.Errorf("GEO-05 %s: %+v", c.name, got)
+		}
+	}
+	if got := run(env{os: "Ubuntu", sec: `[]`, mode: "proxy", nets: nets, v6: "false"}); len(got.Networks) != 2 || got.Networks[0] != "bridge" {
+		t.Errorf("GEO-05 networks: %+v", got.Networks)
+	}
+
+	f := newFullApp(t)
+	boss := f.admin(t)
+	_ = f.app.store.Update(func(d *Data) error { d.Settings.UseCaddy, d.Settings.CaddyMode = true, "api"; return nil })
+	clientEnvMu.Lock()
+	clientEnvKey = ""
+	clientEnvMu.Unlock()
+	if m := boss.must(200, "GET", "/api/client-env", ""); m["kind"] != "outside" {
+		t.Errorf("GEO-05 api mode: %v", m)
+	}
+	_ = f.app.store.Update(func(d *Data) error { d.Settings.UseCaddy = false; return nil })
+	if m := boss.must(200, "GET", "/api/client-env", ""); m["kind"] != "none" {
+		t.Errorf("GEO-05 no caddy: %v", m)
 	}
 }

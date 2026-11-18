@@ -48,7 +48,7 @@ Known scanners, attack tools and probe paths like `/.env` get a 403 right at the
 Public sites that do not go through Cloudflare can be blocked by the visitor's country in Caddy (only listed countries / block listed countries). LAN and Tailscale addresses are never blocked.
 
 ### Dashboard and logs
-Requests per minute, 5xx rate, p95 response time, status codes over time, whether each service responds, container resources, certificate expiry and top client IPs and countries, all as widgets. Every request records the client IP and country (from Cloudflare on Proxied sites, otherwise from a free country database Gilmok downloads). An audit log of who changed what, plus security and system logs, is kept in SQLite and recording is cut back when disk space runs low.
+Requests per minute, 5xx rate, p95 response time, status codes over time, whether each service responds, container resources, certificate expiry, top client IPs and countries, and a world map of requests and refusals per country, all as widgets. Every request records the client IP and country (from Cloudflare on Proxied sites, otherwise from a free country database Gilmok downloads). An audit log of who changed what, plus security and system logs, is kept in SQLite and recording is cut back when disk space runs low.
 
 ### Install what's missing
 No Caddy, Authelia or CrowdSec yet? Gilmok installs them as sibling containers and wires up the connection settings. You can still edit their compose files from the UI afterwards.
@@ -133,7 +133,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Settings and logs stay in `./data`. To pin a version, change the image in the compose file to something like `vitive/gilmok:0.1.12`.
+Settings and logs stay in `./data`. To pin a version, change the image in the compose file to something like `vitive/gilmok:0.1.13`.
 
 ## Environment variables
 
@@ -185,6 +185,8 @@ Pushing a tag like `v0.1.2` makes GitHub Actions run the tests and publish the D
 MIT. See [LICENSE](LICENSE).
 
 Country lookups use the [DB-IP](https://db-ip.com) IP to Country Lite data (CC BY 4.0). Gilmok downloads it at run time; it is not part of the repository or the image. IP Geolocation by DB-IP.
+
+The dashboard world map's land outline is [Natural Earth](https://www.naturalearthdata.com) (public domain) 1:110m data converted from [world-atlas](https://github.com/topojson/world-atlas) (Copyright 2013-2019 Michael Bostock, ISC).
 
 ## Support
 

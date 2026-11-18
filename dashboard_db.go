@@ -204,6 +204,84 @@ func (l *LogDB) TopRequests(ctx context.Context, dim string, from, to int64, hos
 	return out, rows.Err()
 }
 
+// GeoSummary: requests per country (with refusals) and per client source in [from, to].
+func (l *LogDB) GeoSummary(ctx context.Context, from, to int64, host string) ([]geoRow, map[string]int, int, error) {
+	conds, args := []string{"ts>=?", "ts<=?"}, []any{from, to}
+	if host != "" {
+		conds, args = append(conds, "host=?"), append(args, host)
+	}
+	where := strings.Join(conds, " AND ")
+	rows, err := l.r.QueryContext(ctx, `SELECT cc, COUNT(*), SUM(status IN (403,429)), SUM(status<300), SUM(status>=300 AND status<400), SUM(status>=400 AND status<500), SUM(status>=500), COUNT(DISTINCT ip) FROM requests WHERE `+where+` AND IFNULL(cc,'')<>'' GROUP BY cc ORDER BY 2 DESC LIMIT 200`, args...)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	var out []geoRow
+	idx := map[string]int{}
+	for rows.Next() {
+		var g geoRow
+		if err := rows.Scan(&g.CC, &g.N, &g.Blocked, &g.St[0], &g.St[1], &g.St[2], &g.St[3], &g.IPs); err != nil {
+			rows.Close()
+			return nil, nil, 0, err
+		}
+		idx[g.CC] = len(out)
+		out = append(out, g)
+	}
+	rows.Close()
+	// the sites each country asked for (top 3 per country)
+	hr, err := l.r.QueryContext(ctx, `SELECT cc, host, COUNT(*) FROM requests WHERE `+where+` AND IFNULL(cc,'')<>'' GROUP BY cc, host`, args...)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	per := map[string]map[string]int{}
+	for hr.Next() {
+		var cc, host string
+		var n int
+		if err := hr.Scan(&cc, &host, &n); err != nil {
+			hr.Close()
+			return nil, nil, 0, err
+		}
+		if per[cc] == nil {
+			per[cc] = map[string]int{}
+		}
+		per[cc][host] = n
+	}
+	hr.Close()
+	for cc, m := range per {
+		if i, ok := idx[cc]; ok {
+			out[i].Hosts = topHosts(m)
+		}
+	}
+	via, total := map[string]int{}, 0
+	vr, err := l.r.QueryContext(ctx, `SELECT IFNULL(via,''), COUNT(*) FROM requests WHERE `+where+` GROUP BY 1`, args...)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	defer vr.Close()
+	for vr.Next() {
+		var k string
+		var n int
+		if err := vr.Scan(&k, &n); err != nil {
+			return nil, nil, 0, err
+		}
+		via[k] += n
+		total += n
+	}
+	return out, via, total, vr.Err()
+}
+
+func (a *App) dbMap(ctx context.Context, wd Widget, end time.Time) map[string]any {
+	rows, via, total, err := a.ldb.GeoSummary(ctx, end.Add(-wd.dur()).UnixMilli(), end.UnixMilli(), wd.Host)
+	if err != nil {
+		return map[string]any{"countries": []geoRow{}, "error": err.Error()}
+	}
+	if rows == nil {
+		rows = []geoRow{}
+	}
+	out := mapOut(rows, via, total)
+	out["history"] = true
+	return out
+}
+
 func (a *App) dbTop(ctx context.Context, wd Widget, end time.Time) map[string]any {
 	from := end.Add(-wd.dur()).UnixMilli()
 	if wd.Dim == "slow" {
