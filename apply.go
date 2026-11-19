@@ -181,6 +181,9 @@ func writeInPlace(path string, data []byte) error {
 // mounted in both containers) and runs Authelia's own validator inside its container,
 // where the secret files/env are available.
 func validateAutheliaConfig(st Settings, content string) error {
+	if !autheliaInDocker(st) {
+		return validateAutheliaYAML(content) // no Authelia binary to run: what Gilmok can check itself
+	}
 	rb := make([]byte, 6) // unique: two validations at once must not overwrite each other's file
 	_, _ = rand.Read(rb)
 	name := ".gilmok-candidate-" + hex.EncodeToString(rb) + ".yml"
@@ -253,6 +256,10 @@ func restoreAuthelia(L *logger, st Settings, path string, old []byte) {
 	L.f("  ↺ Authelia: 이전 파일로 복구 중…")
 	if err := writeInPlace(path, old); err != nil {
 		L.f("  ✗ 복구 쓰기 실패: %v — 백업 폴더에서 수동 복구가 필요합니다", err)
+		return
+	}
+	if !autheliaInDocker(st) { // never restarted by Gilmok: the running Authelia still has the old file loaded
+		L.f("  ✓ 이전 파일로 되돌렸습니다 (Authelia는 다시 시작하지 않아도 됩니다)")
 		return
 	}
 	if err := restartAuthelia(st); err != nil {
@@ -346,6 +353,8 @@ func (a *App) Apply(allowIPChange bool) ([]string, error) {
 	}
 
 	// 2) backup
+	backupDir, authDeferred := "", false
+	_ = authDeferred
 	if caddyChanged || authChanged {
 		files := map[string]string{}
 		if st.UseCaddy {
@@ -358,6 +367,7 @@ func (a *App) Apply(allowIPChange bool) ([]string, error) {
 		if err != nil {
 			return L.lines, fmt.Errorf("백업 실패: %w", err)
 		}
+		backupDir = dir
 		L.f("• 백업: %s", dir)
 	}
 
@@ -373,7 +383,12 @@ func (a *App) Apply(allowIPChange bool) ([]string, error) {
 			restoreAuthelia(L, st, st.AutheliaConfig, authRaw)
 			return L.lines, fmt.Errorf("Authelia 설정 쓰기 실패 — 되돌렸습니다")
 		}
-		if err := restartAuthelia(st); err != nil {
+		if !autheliaInDocker(st) {
+			L.f("  ✓ configuration.yml을 썼습니다")
+			L.f("  ⚠ Authelia가 Docker 밖에 있어 길목이 다시 시작할 수 없습니다 — Authelia를 다시 시작해야 접근 정책이 반영됩니다 (다시 시작한 뒤 화면 위쪽 「Authelia 재시작 필요」에서 확인)")
+			a.markAutheliaRestart("access_control", st.AutheliaConfig, filepath.Join(backupDir, "configuration.yml"))
+			authDeferred = true
+		} else if err := restartAuthelia(st); err != nil {
 			L.f("  ✗ %v", err)
 			restoreAuthelia(L, st, st.AutheliaConfig, authRaw)
 			return L.lines, fmt.Errorf("Authelia 적용 실패 — 이전 상태로 되돌렸습니다")
@@ -405,6 +420,9 @@ func (a *App) Apply(allowIPChange bool) ([]string, error) {
 			}
 			if authChanged {
 				restoreAuthelia(L, st, st.AutheliaConfig, authRaw)
+				if authDeferred {
+					a.clearAutheliaRestart(st.AutheliaConfig) // back to what the running Authelia has
+				}
 			}
 			return L.lines, fmt.Errorf("Caddy 적용 실패 — 이전 상태로 되돌렸습니다")
 		}
@@ -527,6 +545,17 @@ func (a *App) ApplyUsers(users map[string]*AUser) ([]string, error) {
 		L.f("  ✗ 쓰기 실패: %v", err)
 		restoreAuthelia(L, st, st.AutheliaUsers, old)
 		return L.lines, fmt.Errorf("사용자 파일 쓰기 실패 — 되돌렸습니다")
+	}
+	if !autheliaInDocker(st) {
+		watch := autheliaWatchesUsers(st)
+		L.f("  ✓ 사용자 파일을 썼습니다")
+		if watch {
+			L.f("  • watch: true — Authelia가 파일 변경을 감지하면 바로 반영됩니다. 공유 폴더(Docker Desktop의 Windows 폴더·SMB·NFS)에서는 감지되지 않을 수 있어, 새 사용자로 로그인이 안 되면 Authelia를 다시 시작하세요")
+		} else {
+			L.f("  ⚠ Authelia가 Docker 밖에 있어 길목이 다시 시작할 수 없습니다 — Authelia를 다시 시작하면 반영됩니다 (configuration.yml의 authentication_backend.file.watch: true 를 켜 두면 보통 재시작 없이 반영)")
+		}
+		a.markAutheliaRestartW("users", st.AutheliaUsers, filepath.Join(dir, "users_database.yml"), watch)
+		return L.lines, nil
 	}
 	L.f("▶ Authelia 재시작")
 	if err := restartAuthelia(st); err != nil {

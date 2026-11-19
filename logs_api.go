@@ -257,6 +257,19 @@ func (a *App) autheliaStreamLoop() {
 			time.Sleep(30 * time.Second)
 			continue
 		}
+		if !autheliaInDocker(st) {
+			if st.AutheliaLogFile == "" {
+				time.Sleep(10 * time.Second)
+				continue
+			}
+			path := st.AutheliaLogFile
+			_ = followFile(path, 0, func() bool {
+				s := a.store.Snapshot().Settings
+				return s.UseAuthelia && !autheliaInDocker(s) && s.AutheliaLogFile == path
+			}, nil, a.autheliaLine)
+			time.Sleep(10 * time.Second)
+			continue
+		}
 		ctr := st.AutheliaCtr
 		ctx, cancel := context.WithCancel(context.Background())
 		cmd := exec.CommandContext(ctx, "docker", "logs", "-f", "--tail", "0", ctr)
@@ -275,25 +288,7 @@ func (a *App) autheliaStreamLoop() {
 			sc := bufio.NewScanner(pr)
 			sc.Buffer(make([]byte, 1<<20), 1<<20)
 			for sc.Scan() {
-				line := sc.Text()
-				lvl, act, msg, ok := classifyAutheliaLine(line)
-				if !ok {
-					continue
-				}
-				e := Event{Cat: "security", Level: lvl, Action: act, Msg: msg, Actor: "authelia"}
-				if m := reAuthUser.FindStringSubmatch(line); m != nil {
-					e.Target = m[1]
-				}
-				if m := reAuthIP.FindStringSubmatch(line); m != nil {
-					e.IP = m[1]
-				}
-				if m := reAuthMsg.FindStringSubmatch(line); m != nil {
-					e.Detail = `{"msg":` + strconv.Quote(m[1]) + `}`
-				}
-				if act == "authelia.login" {
-					e.Cat = "audit"
-				}
-				a.ldb.Event(e)
+				a.autheliaLine(sc.Text())
 			}
 		}
 		cancel()
@@ -310,4 +305,26 @@ func csvSafe(cells ...string) []string {
 		}
 	}
 	return cells
+}
+
+// autheliaLine: one line of Authelia's log → a security / audit event (login failures, bans, …).
+func (a *App) autheliaLine(line string) {
+	lvl, act, msg, ok := classifyAutheliaLine(line)
+	if !ok {
+		return
+	}
+	e := Event{Cat: "security", Level: lvl, Action: act, Msg: msg, Actor: "authelia"}
+	if m := reAuthUser.FindStringSubmatch(line); m != nil {
+		e.Target = m[1]
+	}
+	if m := reAuthIP.FindStringSubmatch(line); m != nil {
+		e.IP = m[1]
+	}
+	if m := reAuthMsg.FindStringSubmatch(line); m != nil {
+		e.Detail = `{"msg":` + strconv.Quote(m[1]) + `}`
+	}
+	if act == "authelia.login" {
+		e.Cat = "audit"
+	}
+	a.ldb.Event(e)
 }

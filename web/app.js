@@ -651,6 +651,15 @@ function renderTopbar() {
     b.addEventListener('click', () => gotoTab('logs'));
     area.append(b);
   }
+  if (st.autheliaRestart) {
+    const b = h('button', { type: 'button', class: 'top-pill warn' }, '⟳ Authelia 재시작 필요');
+    b.addEventListener('click', openAutheliaRestart);
+    area.append(hoverTip(b, () => h('div', { class: 'tip-body' },
+      h('b', null, st.autheliaRestart.what === 'users' ? '사용자 변경이 Authelia 재시작을 기다립니다' : st.autheliaRestart.what === 'restore' ? '되돌린 파일이 Authelia 재시작을 기다립니다' : '접근 정책이 Authelia 재시작을 기다립니다'),
+      h('p', null, st.autheliaRestart.watch
+        ? `watch가 켜져 있어 보통은 이미 반영됐습니다 (${st.autheliaRestart.file}). 새 사용자로 로그인이 되면 눌러서 알림을 지우고, 안 되면 Authelia를 다시 시작한 뒤 누르세요.`
+        : `Authelia가 Docker 밖에 있어 길목이 다시 시작할 수 없습니다 (${st.autheliaRestart.file}). 다시 시작한 뒤 눌러서 확인하세요.`))));
+  }
   if (!st.setupDone && can('config') && can('system')) {
     const b = h('button', { type: 'button', class: 'top-pill setup' }, '설정 마법사');
     b.addEventListener('click', openSetupChooser);
@@ -693,6 +702,45 @@ function tipKeepInside(tip) {
   // never move the arrow off the box (half the box width minus the corner)
   dx = Math.max(-(r.width / 2 - 14), Math.min(r.width / 2 - 14, dx));
   tip.style.setProperty('--tip-dx', `${Math.round(dx)}px`);
+}
+
+/** Authelia outside Docker: the user restarted it → check it answers; offer the previous file if not */
+function openAutheliaRestart() {
+  const p = S.state.autheliaRestart;
+  if (!p) return;
+  const msg = h('div', { class: 'stack' });
+  const ok = h('button', { type: 'button', class: 'btn primary' }, '다시 시작했어요 — 확인');
+  const restore = h('button', { type: 'button', class: 'btn danger', hidden: true }, '이전 설정으로 되돌리기');
+  const close = h('button', { type: 'button', class: 'btn ghost' }, '나중에');
+  const what = p.what === 'users' ? '사용자 변경' : p.what === 'restore' ? '되돌린 파일' : '접근 정책(access_control)';
+  const d = openDialog({
+    title: 'Authelia 재시작 필요',
+    body: h('div', { class: 'stack' },
+      h('p', null, `${what}을 ${p.file}에 썼습니다. Authelia가 Docker 밖에 있어 길목이 다시 시작할 수 없습니다 — Authelia를 설치한 방식(서비스 관리자, systemctl restart authelia 등)으로 다시 시작한 뒤 아래를 누르세요.`),
+      p.watch ? callout('', h('span', { class: 'small' }, 'watch가 켜져 있어 Authelia가 파일 변경을 감지했다면 이미 반영됐습니다. 공유 폴더(Docker Desktop의 Windows 폴더·SMB·NFS)에서는 감지되지 않을 수 있습니다 — 새 사용자로 로그인이 되면 다시 시작하지 않고 확인을 눌러도 됩니다.')) : null,
+      h('p', { class: 'small muted' }, '다시 시작하기 전까지는 Authelia가 이전 설정으로 계속 동작합니다.'), msg),
+    footer: [restore, h('span', { class: 'spacer' }), close, ok],
+  });
+  close.addEventListener('click', () => d.close());
+  ok.addEventListener('click', () => busy(ok, async () => {
+    try {
+      const r = await api('POST', '/api/authelia/restarted', {});
+      await refreshState();
+      d.close();
+      toast(r.checked ? 'Authelia가 정상으로 응답합니다 — 변경이 반영됐습니다' : 'Authelia 주소가 없어 확인 없이 알림을 지웠습니다');
+    } catch (ex) {
+      fill(msg, callout('warn', h('b', null, 'Authelia가 응답하지 않습니다'), h('span', { class: 'small' }, ex.message)));
+      restore.hidden = !p.canRestore;
+    }
+  }));
+  restore.addEventListener('click', () => busy(restore, async () => {
+    try {
+      await api('POST', '/api/authelia/restore', {});
+      await refreshState();
+      d.close();
+      toast('이전 파일로 되돌렸습니다 — Authelia를 다시 시작한 뒤 「Authelia 재시작 필요」에서 확인하세요', 'warn', 9000);
+    } catch (ex) { fill(msg, errorBox(ex.message)); }
+  }));
 }
 
 function hoverTip(trigger, render) {
@@ -2582,12 +2630,36 @@ function renderAuthelia(panel) {
   let L;
 
   const conn = connectionBlock('authelia', (r) => L.set('conn', r.status || 'fail', checkStateText(r)));
+  const authHelp = h('div');
   const connForm = settingsForm([
+    { key: 'autheliaMode', type: 'choice', label: 'Authelia 위치',
+      options: [
+        { value: '', icon: 'box', label: 'Docker 컨테이너', desc: '길목이 docker exec로 검증하고, 적용할 때 다시 시작해 정상 시작을 확인합니다. 실패하면 자동으로 되돌립니다' },
+        { value: 'external', icon: 'host', label: 'Docker 밖 (PC·다른 서버)', desc: '길목은 설정 파일만 고칩니다. 다시 시작은 직접 하고, 길목이 Authelia 주소로 정상인지 확인합니다' },
+      ] },
     { key: 'autheliaContainer', label: 'Authelia 컨테이너', mono: true, hint: 'docker ps 에 보이는 이름', picker: 'container' },
-    { key: 'autheliaConfig', label: 'configuration.yml — 길목 컨테이너 안', mono: true, picker: 'file' },
-    { key: 'autheliaUsers', label: 'users_database.yml — 길목 컨테이너 안', mono: true, picker: 'file' },
+    { key: 'autheliaURL', label: 'Authelia 주소 — 상태 확인용', mono: true, placeholder: 'http://host.docker.internal:9091', hint: '길목에서 접속할 수 있는 주소. 다시 시작한 뒤 /api/health 로 정상인지 확인합니다' },
+    { key: 'autheliaConfig', label: 'configuration.yml — 길목이 보는 위치', mono: true, picker: 'file' },
+    { key: 'autheliaUsers', label: 'users_database.yml — 길목이 보는 위치', mono: true, picker: 'file' },
     { key: 'autheliaCtrDir', label: 'config 폴더 — Authelia 컨테이너 안', mono: true, hint: '검증용 후보 파일을 이 폴더 기준으로 읽습니다 (보통 /config)' },
-  ], { actions: [conn.btn], onSaved: () => conn.run(true) });
+    { key: 'autheliaLogFile', label: 'Authelia 로그 파일 — 길목이 보는 위치 (선택)', mono: true, placeholder: '/stacks/authelia-logs/authelia.log', hint: '로그인 실패 같은 보안 이벤트를 모읍니다. Authelia의 log.file_path 로 쓰는 파일' },
+  ], { actions: [conn.btn], extra: authHelp, onSaved: () => conn.run(true) });
+  {
+    const inp = connForm.inputs;
+    const show = () => {
+      const ext = inp.autheliaMode.value === 'external';
+      for (const k of ['autheliaContainer', 'autheliaCtrDir']) inp[k].closest('.field').hidden = ext;
+      for (const k of ['autheliaURL', 'autheliaLogFile']) inp[k].closest('.field').hidden = !ext;
+      fill(authHelp, ext ? callout('', h('b', null, 'Docker 밖 Authelia'),
+        h('ol', { class: 'flow' },
+          h('li', null, 'Authelia의 config 폴더를 길목이 읽고 쓸 수 있게 하고(길목이 Docker면 그 폴더를 마운트), 위의 두 파일 경로를 적기'),
+          h('li', null, '접근 정책을 적용하면 길목이 configuration.yml의 access_control만 고치고 「Authelia 재시작 필요」를 띄웁니다 — Authelia를 다시 시작한 뒤 거기서 「다시 시작했어요」를 누르면 정상인지 확인하고, 시작하지 못하면 이전 파일로 되돌릴 수 있습니다'),
+          h('li', null, '사용자 변경은 configuration.yml의 ', h('code', null, 'authentication_backend.file.watch: true'), ' 를 켜 두면 다시 시작 없이 바로 반영됩니다')),
+        h('span', { class: 'small' }, '길목에는 Authelia 실행 파일이 없어 검증은 YAML 문법과 access_control 구조까지만 합니다.')) : null);
+    };
+    inp.autheliaMode.addEventListener('change', show);
+    show();
+  }
 
   // per-service rules, editable here (saved into the service — same data as the 서비스 tab)
   const sites = S.state.services.filter((s) => s.enabled && !s.dnsOnly);

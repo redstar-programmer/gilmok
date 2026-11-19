@@ -79,10 +79,10 @@ func (a *App) checkUpdates() UpdateInfo {
 	if st.UseCaddy && caddyMode(st) == "docker" {
 		targets = append(targets, [2]string{"caddy", st.CaddyContainer})
 	}
-	if st.UseAuthelia {
+	if st.UseAuthelia && autheliaInDocker(st) {
 		targets = append(targets, [2]string{"authelia", st.AutheliaCtr})
 	}
-	if st.UseCrowdSec {
+	if st.UseCrowdSec && crowdsecInDocker(st) {
 		targets = append(targets, [2]string{"crowdsec", st.CrowdSecContainer})
 	}
 	var items []UpdItem

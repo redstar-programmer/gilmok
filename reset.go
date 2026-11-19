@@ -139,6 +139,9 @@ func (a *App) resetRuntime(keepBackup string) error {
 	if csKeyUIPath != "" {
 		_ = os.Remove(csKeyUIPath) // a bouncer key Gilmok made itself (the bouncer stays in CrowdSec)
 	}
+	if csMachinePath != "" {
+		_ = os.Remove(csMachinePath) // a machine account entered on the screen (it stays in CrowdSec)
+	}
 	if a.ldb != nil {
 		for cat := range logTables {
 			if _, err := a.ldb.deleteBefore(cat, 0); err != nil {

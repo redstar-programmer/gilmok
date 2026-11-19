@@ -47,26 +47,30 @@ type Service struct {
 }
 
 type Settings struct {
-	Lang             string `json:"lang"`              // UI language of this install: ko | en ("" = not chosen yet — the first visit asks)
-	Domain           string `json:"domain"`            // e.g. example.com ("" until set — 설정 탭 › 도메인)
-	TailscaleIP      string `json:"tailscaleIp"`       // e.g. 100.64.0.10
-	TailscalePort    int    `json:"tailscalePort"`     // 8443 (Caddy listener for tailnet-only sites)
-	CaddyContainer   string `json:"caddyContainer"`    // e.g. caddy
-	CaddyfilePath    string `json:"caddyfilePath"`     // /stacks/caddy/Caddyfile (inside this container)
-	CaddyfileInCtr   string `json:"caddyfileInCtr"`    // /etc/caddy/Caddyfile (inside caddy container)
-	AutheliaCtr      string `json:"autheliaContainer"` // e.g. authelia
-	AutheliaConfig   string `json:"autheliaConfig"`    // /stacks/authelia-config/configuration.yml
-	AutheliaUsers    string `json:"autheliaUsers"`     // /stacks/authelia-config/users_database.yml
-	AutheliaCtrDir   string `json:"autheliaCtrDir"`    // /config  (same dir inside authelia container)
-	DefaultPolicy    string `json:"defaultPolicy"`     // deny
-	DDNSEnabled      bool   `json:"ddnsEnabled"`       // update public A/AAAA records when WAN IP changes
-	DDNSIPv6         bool   `json:"ddnsIpv6"`          // also manage AAAA records of public services
-	DDNSIntervalMin  int    `json:"ddnsIntervalMin"`   //
-	CaddyStackDir    string `json:"caddyStackDir"`     // host-visible path for `docker compose` (updates)
-	CaddyService     string `json:"caddyService"`      // compose service name: caddy
-	AutheliaStackDir string `json:"autheliaStackDir"`  //
-	AutheliaService  string `json:"autheliaService"`   // authelia
-	CaddyBase        string `json:"caddyBase"`         // global options + snippets (skeleton)
+	Lang           string `json:"lang"`              // UI language of this install: ko | en ("" = not chosen yet — the first visit asks)
+	Domain         string `json:"domain"`            // e.g. example.com ("" until set — 설정 탭 › 도메인)
+	TailscaleIP    string `json:"tailscaleIp"`       // e.g. 100.64.0.10
+	TailscalePort  int    `json:"tailscalePort"`     // 8443 (Caddy listener for tailnet-only sites)
+	CaddyContainer string `json:"caddyContainer"`    // e.g. caddy
+	CaddyfilePath  string `json:"caddyfilePath"`     // /stacks/caddy/Caddyfile (inside this container)
+	CaddyfileInCtr string `json:"caddyfileInCtr"`    // /etc/caddy/Caddyfile (inside caddy container)
+	AutheliaCtr    string `json:"autheliaContainer"` // e.g. authelia
+	// Authelia outside Docker (external.go): "" = a Docker container, "external" = installed elsewhere
+	AutheliaMode     string `json:"autheliaMode"`
+	AutheliaURL      string `json:"autheliaURL"`      // external: Authelia's address for /api/health (e.g. http://host.docker.internal:9091)
+	AutheliaLogFile  string `json:"autheliaLogFile"`  // external: Authelia's log file as Gilmok sees it (security events); "" = none
+	AutheliaConfig   string `json:"autheliaConfig"`   // /stacks/authelia-config/configuration.yml
+	AutheliaUsers    string `json:"autheliaUsers"`    // /stacks/authelia-config/users_database.yml
+	AutheliaCtrDir   string `json:"autheliaCtrDir"`   // /config  (same dir inside authelia container)
+	DefaultPolicy    string `json:"defaultPolicy"`    // deny
+	DDNSEnabled      bool   `json:"ddnsEnabled"`      // update public A/AAAA records when WAN IP changes
+	DDNSIPv6         bool   `json:"ddnsIpv6"`         // also manage AAAA records of public services
+	DDNSIntervalMin  int    `json:"ddnsIntervalMin"`  //
+	CaddyStackDir    string `json:"caddyStackDir"`    // host-visible path for `docker compose` (updates)
+	CaddyService     string `json:"caddyService"`     // compose service name: caddy
+	AutheliaStackDir string `json:"autheliaStackDir"` //
+	AutheliaService  string `json:"autheliaService"`  // authelia
+	CaddyBase        string `json:"caddyBase"`        // global options + snippets (skeleton)
 
 	// Caddy WAF (Coraza + OWASP CRS) — per-service mode is Service.WAF
 	WafParanoia    int            `json:"wafParanoia"`    // CRS paranoia level 1..4
@@ -135,6 +139,8 @@ type Settings struct {
 	// Cf-Connecting-Ip), Gilmok syncs its ban decisions into a Cloudflare IP list + block rule.
 	CrowdSecEnabled   bool   `json:"crowdsecEnabled"`   // access logs (with real IP) on mTLS sites
 	CrowdSecContainer string `json:"crowdsecContainer"` // e.g. crowdsec
+	CrowdSecMode      string `json:"crowdsecMode"`      // "" = a Docker container, "external" = reached through the LAPI only
+	CrowdSecMachine   string `json:"crowdsecMachine"`   // external: machine account for manual decisions (password in <data>/secrets)
 	CrowdSecLAPI      string `json:"crowdsecLapi"`      // e.g. http://crowdsec:8080
 	CrowdSecSync      bool   `json:"crowdsecSync"`      // push bans to Cloudflare
 	CrowdSecInterval  int    `json:"crowdsecInterval"`  // seconds
@@ -239,33 +245,34 @@ type TopoHop struct {
 }
 
 type Data struct {
-	geoDB         string                   // runtime: the GeoIP database path inside Caddy, set when Caddy can use it
-	Settings      Settings                 `json:"settings"`
-	Services      []*Service               `json:"services"`
-	AdminHash     string                   `json:"adminHash,omitempty"` // before accounts (migrated to Accounts)
-	Accounts      []*Account               `json:"accounts"`
-	Roles         []*Role                  `json:"roles"`
-	LastApplied   time.Time                `json:"lastApplied"`
-	LastPublicIP  string                   `json:"lastPublicIp"`
-	Dirty         bool                     `json:"dirty"`         // there are saved changes not applied yet
-	ManagedDNS    []string                 `json:"managedDns"`    // FQDNs whose A records this app owns
-	ManagedDNS6   []string                 `json:"managedDns6"`   // FQDNs whose AAAA records this app owns
-	LastPublicIP6 string                   `json:"lastPublicIp6"` //
-	DDNS          DDNSStatus               `json:"ddns"`          // last DDNS run (shown in the Cloudflare tab)
-	Pending       []string                 `json:"pending"`       // human-readable list of saved-but-unapplied changes
-	CFWAF         CFWAFState               `json:"cfWaf"`
-	MTLS          MTLSState                `json:"mtls"`                  // Cloudflare client certificate Gilmok made (mtls.go)
-	Dashboard     []Widget                 `json:"dashboard"`             // nil = default layout
-	ProxySecret   string                   `json:"proxySecret"`           // header Caddy adds for Gilmok's own site (never sent to the UI)
-	TOTPSecret    string                   `json:"totpSecret,omitempty"`  // before accounts (migrated)
-	TOTPPending   string                   `json:"totpPending,omitempty"` //
-	Updates       UpdateInfo               `json:"updates"`
-	SelfName      string                   `json:"selfName"`           // this container's name (detected at start)
-	UpdBaseline   map[string]string        `json:"updBaseline"`        // base image → registry digest it was last built from
-	AGroups       []AGroup                 `json:"autheliaGroups"`     // predefined Authelia groups (groups.go)
-	AGroupsInit   bool                     `json:"autheliaGroupsInit"` // seeded once from groups already in use
-	SetupDone     bool                     `json:"setupDone"`          // first-run setup finished or dismissed for good (setup.go)
-	Stacks        map[string]*ManagedStack `json:"stacks,omitempty"`   // stacks Gilmok installed itself (stacks.go)
+	AutheliaRestart *AutheliaRestart         `json:"autheliaRestart,omitempty"` // Authelia outside Docker: a change waiting for its restart
+	geoDB           string                   // runtime: the GeoIP database path inside Caddy, set when Caddy can use it
+	Settings        Settings                 `json:"settings"`
+	Services        []*Service               `json:"services"`
+	AdminHash       string                   `json:"adminHash,omitempty"` // before accounts (migrated to Accounts)
+	Accounts        []*Account               `json:"accounts"`
+	Roles           []*Role                  `json:"roles"`
+	LastApplied     time.Time                `json:"lastApplied"`
+	LastPublicIP    string                   `json:"lastPublicIp"`
+	Dirty           bool                     `json:"dirty"`         // there are saved changes not applied yet
+	ManagedDNS      []string                 `json:"managedDns"`    // FQDNs whose A records this app owns
+	ManagedDNS6     []string                 `json:"managedDns6"`   // FQDNs whose AAAA records this app owns
+	LastPublicIP6   string                   `json:"lastPublicIp6"` //
+	DDNS            DDNSStatus               `json:"ddns"`          // last DDNS run (shown in the Cloudflare tab)
+	Pending         []string                 `json:"pending"`       // human-readable list of saved-but-unapplied changes
+	CFWAF           CFWAFState               `json:"cfWaf"`
+	MTLS            MTLSState                `json:"mtls"`                  // Cloudflare client certificate Gilmok made (mtls.go)
+	Dashboard       []Widget                 `json:"dashboard"`             // nil = default layout
+	ProxySecret     string                   `json:"proxySecret"`           // header Caddy adds for Gilmok's own site (never sent to the UI)
+	TOTPSecret      string                   `json:"totpSecret,omitempty"`  // before accounts (migrated)
+	TOTPPending     string                   `json:"totpPending,omitempty"` //
+	Updates         UpdateInfo               `json:"updates"`
+	SelfName        string                   `json:"selfName"`           // this container's name (detected at start)
+	UpdBaseline     map[string]string        `json:"updBaseline"`        // base image → registry digest it was last built from
+	AGroups         []AGroup                 `json:"autheliaGroups"`     // predefined Authelia groups (groups.go)
+	AGroupsInit     bool                     `json:"autheliaGroupsInit"` // seeded once from groups already in use
+	SetupDone       bool                     `json:"setupDone"`          // first-run setup finished or dismissed for good (setup.go)
+	Stacks          map[string]*ManagedStack `json:"stacks,omitempty"`   // stacks Gilmok installed itself (stacks.go)
 }
 
 type Store struct {

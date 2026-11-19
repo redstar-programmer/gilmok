@@ -138,7 +138,7 @@ func (a *App) getTopology(w http.ResponseWriter, r *http.Request) {
 	for _, c := range []struct {
 		key, ctr string
 		on       bool
-	}{{"caddy", st.CaddyContainer, st.UseCaddy && caddyMode(st) == "docker"}, {"authelia", st.AutheliaCtr, st.UseAuthelia}, {"crowdsec", st.CrowdSecContainer, st.UseCrowdSec}} {
+	}{{"caddy", st.CaddyContainer, st.UseCaddy && caddyMode(st) == "docker"}, {"authelia", st.AutheliaCtr, st.UseAuthelia && autheliaInDocker(st)}, {"crowdsec", st.CrowdSecContainer, st.UseCrowdSec && crowdsecInDocker(st)}} {
 		if c.on && c.ctr != "" {
 			s, _ := ctrStateOf(ctx, c.ctr)
 			info.CtrStates[c.key] = s

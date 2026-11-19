@@ -786,10 +786,46 @@ function renderCrowdSec(panel) {
   const conn = connectionBlock('crowdsec', (r) => L.set('conn', r.status || 'fail', checkStateText(r)));
   const keyHelp = st.csConfigured ? null : callout('warn', h('b', null, 'CrowdSec 바운서 키가 없습니다'),
     h('span', null, '길목 배포 폴더에서 ', h('code', null, 'install.ps1 -CrowdSec'), '(Windows) 또는 compose의 crowdsec 프로필로 CrowdSec을 함께 띄우면 키가 만들어집니다 (deploy/README.md 6장).'));
+  const csExtra = h('div', { class: 'stack' });
   const connForm = settingsForm([
+    { key: 'crowdsecMode', type: 'choice', label: 'CrowdSec 위치',
+      options: [
+        { value: '', icon: 'box', label: 'Docker 컨테이너', desc: '길목이 docker exec cscli로 차단 추가·해제, 바운서 키 만들기, 파서·수집 점검을 합니다' },
+        { value: 'external', icon: 'host', label: 'Docker 밖 (PC·다른 서버)', desc: '길목은 LAPI로만 연결합니다 — 바운서 키는 붙여 넣고, 수동 차단은 머신 계정으로' },
+      ] },
     { key: 'crowdsecContainer', label: 'CrowdSec 컨테이너', mono: true, hint: 'docker ps 에 보이는 이름', picker: 'container' },
-    { key: 'crowdsecLapi', label: 'LAPI 주소', mono: true, hint: '길목에서 접근하는 주소 (예: http://crowdsec:8080)' },
-  ], { actions: [conn.btn], onSaved: () => conn.run(true) });
+    { key: 'crowdsecLapi', label: 'LAPI 주소', mono: true, hint: '길목에서 접근하는 주소 (예: http://crowdsec:8080, Docker 밖이면 http://host.docker.internal:8080)' },
+  ], { actions: [conn.btn], extra: csExtra, onSaved: () => conn.run(true) });
+  {
+    const inp = connForm.inputs;
+    const keyIn = h('input', { type: 'password', class: 'mono', autocomplete: 'off', placeholder: st.csConfigured ? '저장됨 — 바꿀 때만 입력' : 'cscli bouncers add gilmok 출력' });
+    const keySave = h('button', { type: 'button', class: 'btn' }, '바운서 키 저장');
+    keySave.addEventListener('click', () => busy(keySave, async () => {
+      try { await api('POST', '/api/crowdsec/bouncer', { key: keyIn.value }); keyIn.value = ''; await refreshState(); toast('바운서 키를 확인하고 저장했습니다'); conn.run(true); } catch (ex) { toast(ex.message, 'err', 9000); }
+    }));
+    const mId = h('input', { type: 'text', class: 'mono', autocomplete: 'off', value: s.crowdsecMachine || '', placeholder: 'gilmok' });
+    const mPw = h('input', { type: 'password', class: 'mono', autocomplete: 'new-password', placeholder: st.csMachineSet ? '저장됨 — 바꿀 때만 입력' : '' });
+    const mSave = h('button', { type: 'button', class: 'btn' }, '머신 계정 저장');
+    mSave.addEventListener('click', () => busy(mSave, async () => {
+      try { await api('POST', '/api/crowdsec/machine', { id: mId.value, password: mPw.value }); mPw.value = ''; await refreshState(); toast('머신 계정으로 로그인을 확인하고 저장했습니다'); conn.run(true); } catch (ex) { toast(ex.message, 'err', 9000); }
+    }));
+    const extBox = h('div', { class: 'stack' },
+      callout('', h('b', null, 'Docker 밖 CrowdSec'),
+        h('ol', { class: 'flow' },
+          h('li', null, 'CrowdSec이 있는 곳에서 ', h('code', null, 'cscli bouncers add gilmok'), ' → 나온 키를 아래 「바운서 키」에 붙여 넣기 (차단 목록 읽기·Cloudflare 동기화)'),
+          h('li', null, '화면에서 IP를 차단·해제하려면 ', h('code', null, 'cscli machines add gilmok --password <비밀번호> -f /dev/null'), ' → 아래 「머신 계정」에 이름과 비밀번호'),
+          h('li', null, 'Caddy 로그 수집(acquis)과 파서는 그곳의 CrowdSec 설정에서 — Caddy가 Docker 밖이면 접근 로그 파일(Caddy 탭 › 연결)을 type: file 로 읽게 하세요'))),
+      h('div', { class: 'grid-2' },
+        h('div', { class: 'stack' }, field('바운서 키', keyIn, '저장 전에 LAPI에서 실제로 확인합니다. 화면·응답에 다시 나오지 않습니다'), h('div', null, keySave)),
+        h('div', { class: 'stack' }, field('머신 계정 이름', mId), field('머신 계정 비밀번호', mPw, '저장 전에 LAPI 로그인을 확인합니다. 길목 데이터 폴더의 비밀 파일에만 저장'), h('div', null, mSave))));
+    const show = () => {
+      const ext = inp.crowdsecMode.value === 'external';
+      inp.crowdsecContainer.closest('.field').hidden = ext;
+      fill(csExtra, ext ? extBox : null);
+    };
+    inp.crowdsecMode.addEventListener('change', show);
+    show();
+  }
 
   // 2) collection
   const flowFig = h('ol', { class: 'flow' },

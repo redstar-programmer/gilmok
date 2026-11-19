@@ -248,7 +248,34 @@ func (a *App) checkCaddy() CheckResult {
 func (a *App) checkAuthelia() CheckResult {
 	st := a.store.Snapshot().Settings
 	r := CheckResult{Target: "authelia"}
-	running := containerChecks(&r, st.AutheliaCtr, "authelia", "--version")
+	external := !autheliaInDocker(st)
+	running := false
+	if external {
+		r.add("ctr", "Authelia 위치", "info", "Docker 밖 — 길목은 파일만 고치고, 다시 시작은 직접 합니다 (적용 후 「Authelia 재시작 필요」)")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if st.AutheliaURL == "" {
+			r.add("health", "Authelia 응답", "warn", "Authelia 주소가 없어 재시작 후 정상인지 확인할 수 없습니다 — 예: http://host.docker.internal:9091")
+		} else if err := autheliaHealth(ctx, st); err != nil {
+			r.add("health", "Authelia 응답", "fail", err.Error())
+		} else {
+			r.add("health", "Authelia 응답", "ok", st.AutheliaURL+"/api/health")
+		}
+		cancel()
+		if autheliaWatchesUsers(st) {
+			r.add("watch", "사용자 변경 바로 반영", "ok", "authentication_backend.file.watch: true — 보통 사용자 추가·수정에 재시작이 필요 없습니다 (공유 폴더에서는 변경 감지가 안 될 수 있음)")
+		} else {
+			r.add("watch", "사용자 변경 바로 반영", "info", "watch 가 꺼져 있어 사용자를 바꿀 때마다 Authelia를 다시 시작해야 합니다 — configuration.yml의 authentication_backend.file.watch: true 권장")
+		}
+		if st.AutheliaLogFile != "" {
+			if _, err := os.Stat(st.AutheliaLogFile); err != nil {
+				r.add("log", "Authelia 로그 파일", "warn", err.Error())
+			} else {
+				r.add("log", "Authelia 로그 파일", "ok", st.AutheliaLogFile)
+			}
+		}
+	} else {
+		running = containerChecks(&r, st.AutheliaCtr, "authelia", "--version")
+	}
 	// Caddy reaches Authelia by container name (forward_auth / the portal site): only on a shared network
 	if running && st.UseCaddy && caddyMode(st) == "docker" {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -298,7 +325,9 @@ func (a *App) checkAuthelia() CheckResult {
 	} else {
 		r.add("users", "users_database.yml", "ok", fmt.Sprintf("사용자 %d명", len(users)))
 	}
-	if running && err == nil {
+	if external {
+		// nothing to compare: Gilmok's file is the one Authelia reads (a shared folder)
+	} else if running && err == nil {
 		inCtr := strings.TrimRight(st.AutheliaCtrDir, "/") + "/" + filepath.Base(st.AutheliaConfig)
 		sameFile(&r, "mount", "마운트 일치", st.AutheliaCtr, st.AutheliaConfig, inCtr, cfg)
 	} else {

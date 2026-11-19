@@ -647,19 +647,36 @@ func (a *App) followLogFile(path string) error {
 	if last <= 0 {
 		last = time.Now().Add(-time.Hour).UnixMilli()
 	}
+	return followFile(path, -1, func() bool {
+		st := a.store.Snapshot().Settings
+		return st.UseCaddy && caddyLogReadPath(st) == path
+	}, func() {
+		a.mon.mu.Lock()
+		a.mon.streamOK, a.mon.streamErr, a.mon.streamAt = true, "", time.Now()
+		a.mon.mu.Unlock()
+	}, func(line string) { a.feedLogLine(line, last) })
+}
+
+// followFile polls a log file another program appends to: from the last `tail` bytes (-1 = the
+// last 64 MiB, 0 = only new lines), each complete line to onLine, a smaller file = rolled → from
+// its start. Opened only while reading (Windows: the writer can still roll it). Ends when keep()
+// is false (nil) or the file cannot be read (the error).
+func followFile(path string, tail int64, keep func() bool, started func(), onLine func(string)) error {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
-	off := max(0, fi.Size()-64<<20)
-	a.mon.mu.Lock()
-	a.mon.streamOK, a.mon.streamErr, a.mon.streamAt = true, "", time.Now()
-	a.mon.mu.Unlock()
+	if tail < 0 {
+		tail = 64 << 20
+	}
+	off := max(0, fi.Size()-tail)
+	if started != nil {
+		started()
+	}
 	buf := make([]byte, 256<<10)
 	var partial []byte
 	for {
-		st := a.store.Snapshot().Settings
-		if !st.UseCaddy || caddyLogReadPath(st) != path {
+		if !keep() {
 			return nil
 		}
 		fi, err := os.Stat(path)
@@ -685,7 +702,7 @@ func (a *App) followLogFile(path string) error {
 					if i < 0 {
 						break
 					}
-					a.feedLogLine(string(bytes.TrimRight(partial[:i], "\r")), last)
+					onLine(string(bytes.TrimRight(partial[:i], "\r")))
 					partial = partial[i+1:]
 				}
 				if len(partial) > 1<<20 { // not a log line

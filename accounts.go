@@ -236,6 +236,8 @@ var permRoutes = []permRoute{
 	{regexp.MustCompile(`^/api/ddns/run$`), true, "apply"},
 	{regexp.MustCompile(`^/api/crowdsec/sync$`), true, "apply"},
 	{regexp.MustCompile(`^/api/crowdsec/bouncer$`), true, "system"},
+	{regexp.MustCompile(`^/api/crowdsec/machine$`), true, "system"},
+	{regexp.MustCompile(`^/api/authelia/(restarted|restore)$`), true, "apply"},
 	{regexp.MustCompile(`^/api/stacks/`), true, "system"},
 	{regexp.MustCompile(`^/api/dev/fault$`), true, "apply"},
 	{regexp.MustCompile(`^/api/crowdsec/decisions`), true, "security"},

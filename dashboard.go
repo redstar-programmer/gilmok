@@ -557,7 +557,13 @@ func (a *App) containersData(wd Widget) map[string]any {
 	st := a.store.Snapshot().Settings
 	want := wd.Containers
 	if len(want) == 0 {
-		want = []string{st.CaddyContainer, st.AutheliaCtr, st.CrowdSecContainer}
+		want = []string{st.CaddyContainer}
+		if autheliaInDocker(st) {
+			want = append(want, st.AutheliaCtr)
+		}
+		if crowdsecInDocker(st) {
+			want = append(want, st.CrowdSecContainer)
+		}
 		if host, err := hostnameSelf(); err == nil {
 			want = append(want, host)
 		}

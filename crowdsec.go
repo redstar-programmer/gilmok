@@ -234,8 +234,11 @@ func (a *App) getCrowdSec(w http.ResponseWriter, r *http.Request) {
 	st := a.store.Snapshot().Settings
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	res := map[string]any{"keyConfigured": csKey() != ""}
-	c := ctrStatus(st.CrowdSecContainer)
+	res := map[string]any{"keyConfigured": csKey() != "", "external": !crowdsecInDocker(st)}
+	c := CtrStatus{}
+	if crowdsecInDocker(st) {
+		c = ctrStatus(st.CrowdSecContainer)
+	}
 	res["container"] = c
 	if ds, err := csDecisions(ctx, st); err != nil {
 		res["decisionsError"] = err.Error()
@@ -294,6 +297,17 @@ func (a *App) postCSDecision(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, errors.New("사유에는 글자·숫자·공백·._:/- 만 쓸 수 있습니다 (80자 이내)"))
 		return
 	}
+	if !crowdsecInDocker(st) {
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		if err := csAddDecisionLAPI(ctx, st, in.IP, flag == "--range", in.Duration, in.Reason); err != nil {
+			fail(w, 400, err)
+			return
+		}
+		a.crowdsecSyncNow()
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
 	out, err := ctrExec(st.CrowdSecContainer, nil, "cscli", "decisions", "add", flag, in.IP, "--duration", in.Duration, "--reason", in.Reason)
 	if err != nil {
 		fail(w, 400, errors.New(oneLine(out)))
@@ -310,6 +324,17 @@ func (a *App) deleteCSDecision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st := a.store.Snapshot().Settings
+	if !crowdsecInDocker(st) {
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		if err := csDeleteDecisionLAPI(ctx, st, id); err != nil {
+			fail(w, 400, err)
+			return
+		}
+		a.crowdsecSyncNow()
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
 	out, err := ctrExec(st.CrowdSecContainer, nil, "cscli", "decisions", "delete", "--id", strconv.FormatInt(id, 10))
 	if err != nil {
 		fail(w, 400, errors.New(oneLine(out)))
@@ -333,12 +358,32 @@ func (a *App) checkCrowdSec(ctx context.Context) CheckResult {
 	d := a.store.Snapshot()
 	st := d.Settings
 	r := CheckResult{Target: "crowdsec"}
-	running := containerChecks(&r, st.CrowdSecContainer, "cscli", "version")
+	external := !crowdsecInDocker(st)
+	running := false
+	if external {
+		r.add("ctr", "CrowdSec 위치", "info", "Docker 밖 — 길목은 LAPI로만 연결합니다 (파서·수집 점검은 그곳에서 cscli로)")
+		switch {
+		case st.CrowdSecMachine == "" || csMachinePassword() == "":
+			r.add("machine", "머신 계정 (수동 차단)", "warn", "없음 — 화면에서 IP를 차단·해제하려면 「머신 계정」을 넣으세요 (cscli machines add gilmok --password <비밀번호> -f /dev/null — -f /dev/null 은 CrowdSec 자신의 접속 정보 파일을 덮어쓰지 않게)")
+		default:
+			if _, err := csWatcherToken(ctx, st); err != nil {
+				r.add("machine", "머신 계정 (수동 차단)", "fail", err.Error())
+			} else {
+				r.add("machine", "머신 계정 (수동 차단)", "ok", st.CrowdSecMachine)
+			}
+		}
+	} else {
+		running = containerChecks(&r, st.CrowdSecContainer, "cscli", "version")
+	}
 	if csKey() == "" {
-		r.add("key", "바운서 키", "fail", "길목에 바운서 키가 없습니다 — 「바운서 키 만들기」(길목이 cscli bouncers add로 만들어 저장) 또는 배포 설정의 GM_CROWDSEC_KEY_FILE")
+		if external {
+			r.add("key", "바운서 키", "fail", "길목에 바운서 키가 없습니다 — CrowdSec이 있는 곳에서 cscli bouncers add gilmok 으로 만들어 「바운서 키」에 붙여 넣으세요")
+		} else {
+			r.add("key", "바운서 키", "fail", "길목에 바운서 키가 없습니다 — 「바운서 키 만들기」(길목이 cscli bouncers add로 만들어 저장) 또는 배포 설정의 GM_CROWDSEC_KEY_FILE")
+		}
 	} else if ds, err := csDecisions(ctx, st); err != nil {
 		// just (re)started: the LAPI listens ~30s after the container comes up
-		if t, ok := ctrStartedAt(st.CrowdSecContainer); ok && time.Since(t) < 2*time.Minute && strings.Contains(err.Error(), "connection refused") {
+		if t, ok := ctrStartedAt(st.CrowdSecContainer); !external && ok && time.Since(t) < 2*time.Minute && strings.Contains(err.Error(), "connection refused") {
 			r.add("lapi", "LAPI 연결 (바운서 키)", "warn", fmt.Sprintf("CrowdSec이 %d초 전에 시작되어 아직 준비 중입니다 — 잠시 뒤 「다시 확인」을 누르세요", int(time.Since(t).Seconds())))
 		} else {
 			msg := err.Error()
@@ -351,7 +396,7 @@ func (a *App) checkCrowdSec(ctx context.Context) CheckResult {
 		r.add("lapi", "LAPI 연결 (바운서 키)", "ok", fmt.Sprintf("%s · 현재 차단 %d건", st.CrowdSecLAPI, len(banItems(ds))))
 	}
 	// the LAPI address names a different container than the CrowdSec container setting
-	if u, err := url.Parse(st.CrowdSecLAPI); err == nil && u.Hostname() != "" && net.ParseIP(u.Hostname()) == nil &&
+	if u, err := url.Parse(st.CrowdSecLAPI); !external && err == nil && u.Hostname() != "" && net.ParseIP(u.Hostname()) == nil &&
 		u.Hostname() != "localhost" && st.CrowdSecContainer != "" && !strings.EqualFold(u.Hostname(), st.CrowdSecContainer) {
 		r.add("lapi-match", "LAPI 주소 ↔ 컨테이너", "warn", fmt.Sprintf("LAPI 주소는 %s 를, CrowdSec 컨테이너 설정은 %s 를 가리킵니다 — 같은 컨테이너로 맞추세요 (아래 연결 설정)", u.Hostname(), st.CrowdSecContainer))
 	}
@@ -450,6 +495,31 @@ func (a *App) postCSBouncer(w http.ResponseWriter, r *http.Request) {
 	}
 	d := a.store.Snapshot()
 	st := d.Settings
+	if !crowdsecInDocker(st) {
+		var in struct{ Key string }
+		_ = readJSON(r, &in)
+		in.Key = strings.TrimSpace(in.Key)
+		if in.Key == "" || len(in.Key) > 200 || strings.ContainsAny(in.Key, " \r\n\t") {
+			fail(w, 400, errors.New("CrowdSec이 있는 곳에서 cscli bouncers add gilmok 으로 만든 키를 붙여 넣으세요"))
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		if err := csDecisionsWithKey(ctx, st, in.Key); err != nil {
+			fail(w, 400, fmt.Errorf("저장하지 않았습니다: %v", err))
+			return
+		}
+		if err := os.MkdirAll(filepath.Dir(csKeyUIPath), 0o700); err != nil {
+			fail(w, 500, err)
+			return
+		}
+		if err := os.WriteFile(csKeyUIPath, []byte(in.Key), 0o600); err != nil {
+			fail(w, 500, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
 	// a CrowdSec Gilmok installed: put its bouncer "gilmok" back on Gilmok's key (a kept database can
 	// hold an older key) instead of adding another bouncer
 	if rec := d.Stacks["crowdsec"]; rec != nil && rec.Container == st.CrowdSecContainer && csKey() != "" {

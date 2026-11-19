@@ -27,7 +27,7 @@ import (
 //go:embed web
 var webFS embed.FS
 
-var version = "0.1.15"
+var version = "0.1.16"
 
 func main() {
 	dataDir := env("GM_DATA", "/data")
@@ -37,6 +37,7 @@ func main() {
 	}
 	cfTokenUIPath = filepath.Join(dataDir, "secrets", "cf_token")
 	csKeyUIPath = filepath.Join(dataDir, "secrets", "crowdsec_key")
+	csMachinePath = filepath.Join(dataDir, "secrets", "crowdsec_machine")
 	app := &App{store: store, cf: NewCF(), dataDir: dataDir}
 	ldb, err := openLogDB(filepath.Join(dataDir, "gilmok-logs.db"))
 	if err != nil {
@@ -143,6 +144,9 @@ func (app *App) handler() http.Handler {
 	api.HandleFunc("POST /api/stacks/caddy/mtls", S(app.postCaddyMTLS))
 	api.HandleFunc("POST /api/stacks/{name}/{action}", S(app.postStackAction))
 	api.HandleFunc("POST /api/crowdsec/bouncer", S(app.postCSBouncer))
+	api.HandleFunc("POST /api/crowdsec/machine", S(app.postCSMachine))
+	api.HandleFunc("POST /api/authelia/restarted", app.postAutheliaRestarted)
+	api.HandleFunc("POST /api/authelia/restore", S(app.postAutheliaRestore))
 	api.HandleFunc("POST /api/reset", S(app.postReset))
 	api.HandleFunc("GET /api/check/{target}", app.getCheck)
 	api.HandleFunc("POST /api/validate", app.postValidate)
@@ -283,8 +287,9 @@ func (a *App) getState(w http.ResponseWriter, r *http.Request) {
 		"pending": d.Pending, "managedDns": d.ManagedDNS, "managedDns6": d.ManagedDNS6,
 		"lastPublicIp6": d.LastPublicIP6, "ddns": d.DDNS, "autheliaGroups": d.AGroups,
 		"faultInjection": faultsEnabled(), "fault": a.peekFault(),
-		"csConfigured": csKey() != "", "cfWafIds": d.CFWAF, "setupDone": d.SetupDone,
-		"disk": a.diskSummary(), "updates": map[string]any{"count": d.Updates.count(), "checked": d.Updates.Checked, "items": d.Updates.Items},
+		"csConfigured": csKey() != "", "csMachineSet": csMachinePassword() != "", "cfWafIds": d.CFWAF, "setupDone": d.SetupDone,
+		"autheliaRestart": autheliaRestartView(d.AutheliaRestart),
+		"disk":            a.diskSummary(), "updates": map[string]any{"count": d.Updates.count(), "checked": d.Updates.Checked, "items": d.Updates.Items},
 		"me":       a.meOf(r, &d),
 		"security": map[string]any{"totp": myTOTP(a, r, &d), "selfName": d.SelfName, "via": accessOf(r.Context()).via, "ssoUser": accessOf(r.Context()).ssoUser},
 	})
@@ -789,7 +794,10 @@ func (a *App) getSystem(w http.ResponseWriter, r *http.Request) {
 			caddy.Version = v
 		}
 	}
-	auth := ctrStatus(st.AutheliaCtr)
+	auth := CtrStatus{}
+	if autheliaInDocker(st) {
+		auth = ctrStatus(st.AutheliaCtr)
+	}
 	if auth.Exists {
 		if v, err := ctrExec(st.AutheliaCtr, nil, "authelia", "--version"); err == nil {
 			auth.Version = strings.TrimSpace(strings.TrimPrefix(v, "authelia version "))
@@ -910,7 +918,8 @@ func systemSettingKey(k string) bool {
 	switch k {
 	case "caddyfilePath", "caddyfileInCtr", "caddyContainer", "autheliaContainer", "autheliaConfig", "autheliaUsers",
 		"autheliaCtrDir", "caddyStackDir", "autheliaStackDir", "caddyService", "autheliaService",
-		"crowdsecContainer", "crowdsecLapi", "caddyMode", "caddyBin", "caddyAdmin", "caddyLogFile", "caddyLogRead":
+		"crowdsecContainer", "crowdsecLapi", "caddyMode", "caddyBin", "caddyAdmin", "caddyLogFile", "caddyLogRead",
+		"autheliaMode", "autheliaURL", "autheliaLogFile", "crowdsecMode", "crowdsecMachine":
 		return true
 	}
 	return strings.HasPrefix(k, "use")
@@ -962,6 +971,15 @@ func (a *App) checkSystemSettings(cur, in Settings) error {
 			d = filepath.Clean(d)
 			if p == d || strings.HasPrefix(p, d+string(filepath.Separator)) {
 				return fmt.Errorf("Caddy 접근 로그로 %s 아래를 읽을 수 없습니다", d)
+			}
+		}
+	}
+	if in.AutheliaLogFile != "" && in.AutheliaLogFile != cur.AutheliaLogFile {
+		p := filepath.Clean(in.AutheliaLogFile)
+		for _, d := range deny {
+			d = filepath.Clean(d)
+			if p == d || strings.HasPrefix(p, d+string(filepath.Separator)) {
+				return fmt.Errorf("Authelia 로그로 %s 아래를 읽을 수 없습니다", d)
 			}
 		}
 	}
@@ -1126,6 +1144,26 @@ func normalizeSettings(p *Settings) error {
 	}
 	in.CaddyAdmin = strings.TrimRight(strings.TrimSpace(in.CaddyAdmin), "/")
 	in.CaddyLogFile, in.CaddyLogRead = strings.TrimSpace(in.CaddyLogFile), strings.TrimSpace(in.CaddyLogRead)
+	if in.AutheliaMode != "" && in.AutheliaMode != "external" {
+		return fmt.Errorf("Authelia 위치가 올바르지 않습니다: %s", in.AutheliaMode)
+	}
+	if in.CrowdSecMode != "" && in.CrowdSecMode != "external" {
+		return fmt.Errorf("CrowdSec 위치가 올바르지 않습니다: %s", in.CrowdSecMode)
+	}
+	in.AutheliaURL = strings.TrimRight(strings.TrimSpace(in.AutheliaURL), "/")
+	if in.AutheliaURL != "" {
+		if err := checkServiceURL("Authelia 주소", in.AutheliaURL); err != nil {
+			return err
+		}
+	}
+	in.AutheliaLogFile = strings.TrimSpace(in.AutheliaLogFile)
+	if in.AutheliaLogFile != "" && !caddyLogPathOK(in.AutheliaLogFile) {
+		return errors.New("Authelia 로그 파일은 절대 경로여야 합니다 (따옴표·중괄호·줄바꿈 없이)")
+	}
+	in.CrowdSecMachine = strings.TrimSpace(in.CrowdSecMachine)
+	if in.CrowdSecMachine != "" && !reCSMachine.MatchString(in.CrowdSecMachine) {
+		return errors.New("CrowdSec 머신 이름에는 글자·숫자·._- 만 쓸 수 있습니다")
+	}
 	if in.CaddyLogFile != "" && !caddyLogPathOK(in.CaddyLogFile) {
 		return errors.New("Caddy 접근 로그 파일은 절대 경로여야 하고 따옴표·중괄호·줄바꿈을 쓸 수 없습니다 (예: C:/caddy/logs/access.log, /var/log/caddy/access.log)")
 	}
@@ -1193,4 +1231,12 @@ func blockedHost(host string) bool {
 		return ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 	}
 	return false
+}
+
+// autheliaRestartView: the pending Authelia restart for the UI (without the backup path).
+func autheliaRestartView(p *AutheliaRestart) any {
+	if p == nil {
+		return nil
+	}
+	return map[string]any{"at": p.At, "what": p.What, "file": filepath.Base(p.File), "canRestore": p.Backup != "", "watch": p.Watch}
 }
