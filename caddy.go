@@ -244,6 +244,8 @@ func parseSite(b caddyBlock, st Settings) (*Service, []string) {
 				continue // generated: Gilmok proxy secret
 			case code == "log" && commentOf(trim) == "gilmok":
 				continue // generated: dashboard / CrowdSec access log
+			case strings.HasPrefix(code, "encode ") && commentOf(trim) == "gilmok":
+				continue // generated: response compression (on unless the service turns it off)
 			case isRealIP(code), code == "log" && isRealIP(codeAt(i+1)):
 				continue // generated when CrowdSec is on (mTLS sites)
 			case code == "import "+snippetMTLS:
@@ -330,6 +332,11 @@ func GenerateCaddyfile(d Data) string {
 			// who and from where (dashboard / logs): Cloudflare's client address and country
 			sb.WriteString("\tlog_append " + cfIPField + " {http.request.header.Cf-Connecting-Ip}\n")
 			sb.WriteString("\tlog_append " + cfCountryField + " {http.request.header.Cf-Ipcountry}\n")
+		}
+		// response compression: text (HTML, CSS, JS, JSON, …) only — Caddy leaves images, video and
+		// responses the service already compressed alone
+		if !s.NoEncode && !extraHasEncode(s.Extra) {
+			sb.WriteString("\tencode zstd gzip # gilmok\n")
 		}
 		if geoTarget(d, s) && geoActive(d) {
 			sb.WriteString("\timport " + snippetGeo + "\n")

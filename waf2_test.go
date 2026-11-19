@@ -36,8 +36,8 @@ func TestGuardAndServiceWAF(t *testing.T) {
 		"(gm_waf_block) {", "(gm_waf_block_photo_x_2) {", "tx.blocking_paranoia_level=2", "SecRuleRemoveById 942100",
 		"SecRuleRemoveById 944000-944999", "SecRuleRemoveById 920350", "tx.inbound_anomaly_score_threshold=10",
 		"tx.allowed_methods=GET HEAD POST OPTIONS PUT PATCH DELETE",
-		"app.example.com {\n\tlog # gilmok\n\timport gm_guard\n\timport gm_waf_block\n",
-		"photo-x.example.com {\n\tlog # gilmok\n\timport gm_waf_block_photo_x_2\n",
+		"app.example.com {\n\tlog # gilmok\n\tencode zstd gzip # gilmok\n\timport gm_guard\n\timport gm_waf_block\n",
+		"photo-x.example.com {\n\tlog # gilmok\n\tencode zstd gzip # gilmok\n\timport gm_waf_block_photo_x_2\n",
 	} {
 		if !strings.Contains(gen, want) {
 			t.Fatalf("missing %q:\n%s", want, gen)

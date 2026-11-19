@@ -263,6 +263,17 @@ func extraHasLog(extra string) bool {
 	return false
 }
 
+// extraHasEncode: the user's own directives already set compression (theirs wins, no second one).
+func extraHasEncode(extra string) bool {
+	for _, l := range strings.Split(extra, "\n") {
+		f := strings.Fields(stripComment(strings.TrimSpace(l)))
+		if len(f) > 0 && f[0] == "encode" {
+			return true
+		}
+	}
+	return false
+}
+
 func validateWAFDirectives(s string) error {
 	if strings.Contains(s, "`") {
 		return fmt.Errorf("WAF 추가 규칙에는 ` (백틱)을 쓸 수 없습니다")

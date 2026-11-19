@@ -29,8 +29,8 @@ func TestWAFAndCrowdSecGenerateRoundTrip(t *testing.T) {
 	for _, want := range []string{
 		"(gm_waf_block) {", "(gm_waf_detect) {", "SecRuleEngine On", "SecRuleEngine DetectionOnly",
 		"tx.blocking_paranoia_level=2", "SecRuleRemoveById 920350", "SecRequestBodyAccess Off",
-		"joplin.example.com {\n\timport cf_only\n\tlog # gilmok\n\tlog_append gm_real_ip {http.request.header.Cf-Connecting-Ip}\n\tlog_append gm_cf_ip {http.request.header.Cf-Connecting-Ip}\n\tlog_append gm_cf_cc {http.request.header.Cf-Ipcountry}\n\timport gm_waf_block\n",
-		"immich.example.com {\n\tlog # gilmok\n\timport gm_waf_detect\n\treverse_proxy", // dashboard log (DashLogs) but no real IP
+		"joplin.example.com {\n\timport cf_only\n\tlog # gilmok\n\tlog_append gm_real_ip {http.request.header.Cf-Connecting-Ip}\n\tlog_append gm_cf_ip {http.request.header.Cf-Connecting-Ip}\n\tlog_append gm_cf_cc {http.request.header.Cf-Ipcountry}\n\tencode zstd gzip # gilmok\n\timport gm_waf_block\n",
+		"immich.example.com {\n\tlog # gilmok\n\tencode zstd gzip # gilmok\n\timport gm_waf_detect\n\treverse_proxy", // dashboard log (DashLogs) but no real IP
 	} {
 		if !strings.Contains(gen, want) {
 			t.Fatalf("generated Caddyfile missing %q:\n%s", want, gen)

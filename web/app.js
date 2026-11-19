@@ -1369,13 +1369,14 @@ function openServiceDrawer(svc, preset) {
   const enabled = switchCtl('사용', s.enabled, '끄면 Caddyfile에서 빠지고, 앱이 만든 DNS 레코드는 삭제됩니다');
   const manageDns = switchCtl('DNS 자동 관리', s.manageDns, 'Cloudflare A 레코드를 생성·수정·삭제합니다');
   const dnsOnly = switchCtl('DNS 전용 (Caddy 사이트 없음)', s.dnsOnly, '예: sftpgo — DNS 레코드만 관리');
+  const encodeSw = switchCtl('응답 압축 (zstd·gzip)', !s.noEncode, 'HTML·CSS·JS·JSON 같은 텍스트를 압축해 보냅니다 — 밖에서 접속할 때 빨라집니다. 이미지·동영상·이미 압축된 응답은 그대로. 실시간 이벤트(SSE)가 늦게 오는 서비스가 있으면 끄세요.');
   const opts = h('div', { class: 'section-box' }, h('h3', null, '동작'), enabled);
   const noCaddy = callout('', 'Caddy를 쓰지 않는 구성이라 이 서비스는 DNS 레코드와 연결 상태만 다룹니다.');
   // rarely changed: folded away, opened when one of them is already in use
-  const advOpen = !!(s.extra || '').trim() || s.dnsOnly || (use('cloudflare') && s.manageDns === false);
+  const advOpen = !!(s.extra || '').trim() || s.dnsOnly || s.noEncode || (use('cloudflare') && s.manageDns === false);
   const advanced = h('details', { class: 'svc-more', open: advOpen },
-    h('summary', null, '고급 설정', h('span', { class: 'hint' }, ' — 추가 Caddy 지시어 · DNS 자동 관리 · DNS 전용')),
-    h('div', { class: 'stack' }, extraField, manageDns, dnsOnly));
+    h('summary', null, '고급 설정', h('span', { class: 'hint' }, ' — 응답 압축 · 추가 Caddy 지시어 · DNS 자동 관리 · DNS 전용')),
+    h('div', { class: 'stack' }, use('caddy') ? encodeSw : null, extraField, manageDns, dnsOnly));
 
   const errEl = h('p', { class: 'form-error', role: 'alert', hidden: true });
   const form = h('form', { class: 'stack', novalidate: true },
@@ -1432,6 +1433,7 @@ function openServiceDrawer(svc, preset) {
       authelia: use('authelia') ? { enabled: authOn.input.checked, policy: policy.get(), groups: splitList(groups.value) } : s.authelia,
       waf: use('caddy') ? waf.get() || '' : s.waf,
       guard: use('caddy') ? guardSw.input.checked : !!s.guard,
+      noEncode: use('caddy') ? !encodeSw.input.checked : !!s.noEncode,
       extra: extra.value.replace(/\s+$/, ''),
       notes: notes.value.trim(),
       enabled: enabled.input.checked,

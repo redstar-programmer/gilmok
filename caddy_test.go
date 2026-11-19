@@ -181,3 +181,45 @@ func TestCheckBraces(t *testing.T) {
 		}
 	}
 }
+
+// ENC-01: response compression — on by default, off per service, the user's own encode wins (no
+// second one), the generated line is dropped on import while the user's stays.
+func TestCaddyEncode(t *testing.T) {
+	d := Data{Settings: defaultSettings()}
+	d.Settings.Domain = "example.com"
+	d.Settings.UseCaddy = true
+	d.Services = []*Service{
+		{ID: "a", Subdomain: "on", Upstream: "a:80", Exposure: ExposurePublic, Enabled: true},
+		{ID: "b", Subdomain: "off", Upstream: "b:80", Exposure: ExposurePublic, Enabled: true, NoEncode: true},
+		{ID: "c", Subdomain: "own", Upstream: "c:80", Exposure: ExposurePublic, Enabled: true, Extra: "encode gzip"},
+	}
+	g := GenerateCaddyfile(d)
+	site := func(sub string) string {
+		i := strings.Index(g, sub+".example.com {")
+		if i < 0 {
+			t.Fatalf("ENC-01: %s not generated", sub)
+		}
+		return g[i : i+strings.Index(g[i:], "\n}")]
+	}
+	if !strings.Contains(site("on"), "\tencode zstd gzip # gilmok\n") {
+		t.Errorf("ENC-01: on by default:\n%s", site("on"))
+	}
+	if strings.Contains(site("off"), "encode") {
+		t.Errorf("ENC-01: turned off but generated:\n%s", site("off"))
+	}
+	if strings.Count(site("own"), "encode") != 1 || !strings.Contains(site("own"), "encode gzip") {
+		t.Errorf("ENC-01: the user's encode must be the only one:\n%s", site("own"))
+	}
+	_, got, _, err := ImportCaddyfile(g, d.Settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range got {
+		if strings.Contains(s.Extra, "zstd") {
+			t.Errorf("ENC-01: generated encode leaked into Extra of %s: %q", s.Subdomain, s.Extra)
+		}
+		if s.Subdomain == "own" && s.Extra != "encode gzip" {
+			t.Errorf("ENC-01: the user's encode was dropped: %q", s.Extra)
+		}
+	}
+}

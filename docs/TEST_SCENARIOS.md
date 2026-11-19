@@ -794,6 +794,8 @@ go test -count=1 -run 'Groups|Bulk' ./...   # 일부
 | UPD-13 | 되돌리기 (실제 Docker) | caddy:2 기반 compose, 시작 못 하는 새 빌드로 업데이트 | 이전 이미지·실행 중·caddy 응답 | P1 | ✅ `TestRealUpdateRollback` (GM_REAL_DOCKER=1) — 발견: 새 빌드가 이름을 가져가면 Docker Desktop(containerd)이 이름 없는 이전 이미지를 바로 지움 → 백업 이름을 붙이게 함 (2026-11-19) |
 | AUTO-01 | 자동 업데이트 | 정한 시각이 아님 / 그 시각 · 새 이미지 / 같은 날 다시 / 켜지 않은 구성요소 / Docker 밖 Caddy | 안 함 / 켠 것만 업데이트·결과 기록 / 하루 한 번 / 대상 아님 / 대상 아님 | P1 | ✅ `TestScnUpdates` |
 | MSTK-23 | 관리형 Caddy → 발행 이미지 | 이미지가 아직 없음 / compose 직접 고침 / 손대지 않은 생성 파일 / 설치 옵션 build=1 | 그대로 / 그대로 / `image: vitive/gilmok-caddy:latest`로 / 직접 빌드 줄 | P1 | ✅ `TestMigrateManagedCaddyImage` · 발행 Dockerfile 실제 빌드 amd64·arm64(교차 컴파일): 두 이미지 모두 Caddy v2.11.9 + cloudflare·waf·maxmind 모듈 (2026-11-19) |
+| ENC-01 | 응답 압축 생성 | 기본 / 서비스에서 끔 / 추가 지시어에 사용자 encode / 가져오기 | `encode zstd gzip # gilmok` / 없음 / 사용자 것만 하나 / 생성 줄은 버리고 사용자 것은 남김 | P1 | ✅ `TestCaddyEncode` |
+| ENC-02 | 응답 압축 실제 동작 (vitive/gilmok-caddy) | HTML·JSON (zstd 또는 gzip 요청) / 압축 안 받는 요청 / PNG / 이미 gzip인 응답 / 13바이트 텍스트 / SSE 0.3초 간격 | zstd·gzip으로 줄어듦 / 그대로 / 그대로 / 다시 압축 안 함 / 그대로(작은 응답) / 압축돼도 이벤트가 0.3초마다 도착(버퍼링 없음) | P1 | ✅ 실제 Caddy + Node 시험 서버 (2026-11-19) |
 | E2E-01~22 | 실제 처음 설치 | 실제 Docker: 언어 → 관리자 → Caddy(네트워크 지정·내부 인증서) → Authelia(네트워크 비움) → CrowdSec → 서비스 → 점검 → 적용 → 실제 접속 → CrowdSec 재시작 → 보류 | 전부 통과 | P1 | ✅ 24/24 (2026-11-18, 실제 Docker) |
 | E2E-P2-01~14 | 예전 Caddyfile → 관리형 스택 | PC 파일 가져오기 → CA 없이 적용(mTLS 보류) → 잘못된 PEM → CA 넣고 적용 → 클라이언트 인증서 없는 접속 거부 → 점검 | 전부 통과 | P1 | ✅ 14/14 (2026-11-18, 실제 Docker) |
 

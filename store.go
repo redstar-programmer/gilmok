@@ -43,6 +43,7 @@ type Service struct {
 	WAFParanoia int            `json:"wafParanoia,omitempty"` // blocking paranoia level override 1..4
 	WAFExclude  []WafExclusion `json:"wafExclude,omitempty"`  // CRS rules switched off for this site only
 	Guard       bool           `json:"guard"`                 // Caddy basic blocking (bots / attack paths), see guard.go
+	NoEncode    bool           `json:"noEncode,omitempty"`    // response compression off (on by default: encode zstd gzip)
 	Updated     time.Time      `json:"updated"`               //
 }
 
