@@ -176,8 +176,10 @@ func TestManagedCaddyInstall(t *testing.T) {
 	if fi, err := os.Stat(filepath.Join(rec.Dir, ".env")); err != nil || (fi.Mode().Perm()&0o077 != 0 && os.PathSeparator == '/') {
 		t.Fatalf(".env: %v", err)
 	}
-	if !strings.Contains(string(compose), "name: gilmok-caddy") || !fd.called("build --pull") {
-		t.Fatal("compose build not run")
+	// the published image (vitive/gilmok-caddy) is pulled, not built (build=1 builds locally)
+	if !strings.Contains(string(compose), "name: gilmok-caddy") || !strings.Contains(string(compose), "image: "+managedCaddyImage()) ||
+		strings.Contains(string(compose), "build:") || fd.called("build --pull") || !fd.called("pull") {
+		t.Fatalf("compose pull of the published image not run:\n%s", compose)
 	}
 	// the generated Caddyfile path is accepted by the settings guard
 	boss.must(200, "PUT", "/api/settings", settingsJSON(t, f, func(s *Settings) { s.WafParanoia = 2 }))

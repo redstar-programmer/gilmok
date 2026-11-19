@@ -51,6 +51,53 @@ FROM caddy:latest
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
 `
 
+// managedCaddyImage: the Caddy Gilmok installs — published with the same modules by
+// .github/workflows/caddy.yml, so registry-based update tools can see its updates. GM_CADDY_IMAGE
+// points a fork at its own image. Install option build=1 builds locally from caddyDockerfile instead.
+func managedCaddyImage() string {
+	if v := strings.TrimSpace(os.Getenv("GM_CADDY_IMAGE")); v != "" {
+		return v
+	}
+	return "vitive/gilmok-caddy:latest"
+}
+
+// the image lines of a generated compose.yml that builds locally (before 0.1.17 always)
+const caddyBuildLines = "    build: .\n    image: gilmok-caddy:local\n"
+
+// migrateManagedCaddyImage: an installed Caddy whose compose.yml is still the generated one that
+// builds locally switches to the published image — once the image is really on the registry. The
+// running container stays as it is; the next image update (by hand or automatic) pulls it.
+func (a *App) migrateManagedCaddyImage(ctx context.Context) {
+	rec := a.store.Snapshot().Stacks["caddy"]
+	if rec == nil || rec.Options["customCompose"] == "1" || rec.Options["build"] == "1" {
+		return
+	}
+	p := filepath.Join(rec.Dir, "compose.yml")
+	b, err := os.ReadFile(p)
+	if err != nil || !strings.Contains(string(b), caddyBuildLines) {
+		return
+	}
+	img := managedCaddyImage()
+	c, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if _, err := registryDigest(c, img); err != nil {
+		return // not published (yet) or no network: keep building locally, try again next start
+	}
+	next := strings.Replace(string(b), caddyBuildLines, "    image: "+img+"\n", 1)
+	if os.WriteFile(p, []byte(next), 0o644) == nil {
+		a.logEvent("system", "info", "stack.image", rec.Container, fmt.Sprintf("관리형 Caddy가 직접 빌드 대신 %s 이미지를 쓰도록 바꿨습니다 — 다음 이미지 업데이트 때 받습니다 (Dockhand 같은 도구도 업데이트를 확인할 수 있게 됨)", img), nil)
+	}
+}
+
+// caddyComposeImageLines: pull the published image, or build locally (install option build=1:
+// own modules in the Dockerfile next to compose.yml).
+func caddyComposeImageLines(o map[string]string) string {
+	if o["build"] == "1" {
+		return caddyBuildLines
+	}
+	return "    image: " + managedCaddyImage() + "\n"
+}
+
 // upgradeManagedCaddyDockerfile: an untouched Dockerfile of an older version gets the new modules
 // (they arrive with the next image update — Caddy tab › image update).
 func (a *App) upgradeManagedCaddyDockerfile() {
@@ -262,13 +309,12 @@ func renderCaddyStack(a *App, o map[string]string, dir, host, network, ctr strin
 		tp := strconv.Itoa(d.Settings.TailscalePort)
 		ports = append(ports, yq(caddyPrivBind(d.Settings)+":"+tp+":"+tp))
 	}
+	imageLines := caddyComposeImageLines(o)
 	compose := `# 길목이 만든 파일입니다 (관리형 Caddy). 직접 고치면 다시 설치할 때 덮어써집니다.
 name: ` + stackProject(ctr) + `
 services:
   caddy:
-    build: .
-    image: gilmok-caddy:local
-    container_name: ` + ctr + `
+` + imageLines + `    container_name: ` + ctr + `
     restart: unless-stopped
     labels:
       gilmok.managed: caddy

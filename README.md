@@ -51,7 +51,7 @@ Cloudflare를 거치지 않는 공개 사이트는 Caddy에서 접속자 국가�
 분당 요청 수, 5xx 비율, 응답시간 p95, 상태코드별 추이, 서비스 응답 여부, 컨테이너 자원, 인증서 만료일, 접속자 IP·국가 순위, 나라별 요청·차단을 표시하는 세계지도를 위젯으로 봅니다. 요청마다 접속자 IP와 국가가 남습니다(Proxied 사이트는 Cloudflare가 알려 준 값, 그 밖에는 길목이 받는 무료 국가 DB로 판정). 누가 무엇을 바꿨는지 남는 감사 로그와 보안·시스템 로그는 SQLite에 저장되고, 디스크 여유가 줄면 기록을 줄입니다.
 
 ### 없는 구성요소 설치
-Caddy, Authelia, CrowdSec이 아직 없다면 길목이 옆 컨테이너로 설치하고 연결 설정까지 맞춥니다. 설치한 뒤에도 compose 파일을 화면에서 고칠 수 있습니다.
+Caddy, Authelia, CrowdSec이 아직 없다면 길목이 옆 컨테이너로 설치하고 연결 설정까지 맞춥니다. 설치한 뒤에도 compose 파일을 화면에서 고칠 수 있습니다. Caddy는 Cloudflare DNS·Coraza WAF·GeoIP 모듈을 넣어 올려 둔 [vitive/gilmok-caddy](https://hub.docker.com/r/vitive/gilmok-caddy) 이미지를 씁니다. 새 이미지는 정한 시각에 자동으로 바꿀 수 있고, 새 이미지가 시작하지 못하면 이전 이미지로 되돌립니다.
 
 ### 구성도
 인터넷에서 Cloudflare, 공유기, Caddy를 거쳐 각 서비스까지 이어지는 경로를 그림으로 그립니다. 응답하지 않는 서비스로 가는 선은 멈춘 점선으로 표시됩니다.
@@ -133,7 +133,7 @@ docker compose pull
 docker compose up -d
 ```
 
-설정과 로그는 `./data`에 남아 있습니다. 버전을 고정하려면 compose 파일의 이미지를 `vitive/gilmok:0.1.16`처럼 바꾸세요.
+설정과 로그는 `./data`에 남아 있습니다. 버전을 고정하려면 compose 파일의 이미지를 `vitive/gilmok:0.1.17`처럼 바꾸세요.
 
 ## 환경변수
 

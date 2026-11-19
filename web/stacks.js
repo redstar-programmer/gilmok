@@ -318,6 +318,9 @@ function stackInstallFields(name, defaultContainer, o = {}) {
     fields.push(field('HTTPS 포트 (호스트)', port, '인터넷에서 들어오는 포트 — 앞단 장비가 다른 포트로 넘기면 그 포트'), open80, h('div', { class: 'stack tight' }, tls, tlsHint));
     read.httpsPort = () => port.value;
     read.open80 = () => (open80.input.checked ? '1' : '');
+    const buildSw = switchCtl('이미지를 직접 빌드 (고급)', false, '보통은 길목이 올려 둔 vitive/gilmok-caddy 이미지(Cloudflare DNS·Coraza WAF·GeoIP 포함)를 받습니다 — Dockhand 같은 도구도 업데이트를 확인할 수 있습니다. 모듈을 더 넣으려면 켜고, 설치 뒤 스택 폴더의 Dockerfile에 --with 줄을 추가하세요 (빌드에 몇 분 걸림).');
+    fields.push(buildSw);
+    read.build = () => (buildSw.input.checked ? '1' : '');
     read.tls = () => tls.get();
     if (use('cloudflare')) {
       const ca = h('textarea', { class: 'code', rows: '4', spellcheck: 'false', placeholder: '-----BEGIN CERTIFICATE-----\n…\n-----END CERTIFICATE-----' });

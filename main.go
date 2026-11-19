@@ -27,7 +27,7 @@ import (
 //go:embed web
 var webFS embed.FS
 
-var version = "0.1.16"
+var version = "0.1.17"
 
 func main() {
 	dataDir := env("GM_DATA", "/data")
@@ -51,6 +51,7 @@ func main() {
 	app.inferComponents()
 	app.fixManagedCaddyACME() // installs made without a token by older versions
 	app.upgradeManagedCaddyDockerfile()
+	go app.migrateManagedCaddyImage(context.Background())
 	app.logEvent("system", "info", "gilmok.start", "", "길목 시작 v"+version, nil)
 	app.cs.kick = make(chan struct{}, 1)
 	app.mon = newMonitor()
@@ -288,8 +289,8 @@ func (a *App) getState(w http.ResponseWriter, r *http.Request) {
 		"lastPublicIp6": d.LastPublicIP6, "ddns": d.DDNS, "autheliaGroups": d.AGroups,
 		"faultInjection": faultsEnabled(), "fault": a.peekFault(),
 		"csConfigured": csKey() != "", "csMachineSet": csMachinePassword() != "", "cfWafIds": d.CFWAF, "setupDone": d.SetupDone,
-		"autheliaRestart": autheliaRestartView(d.AutheliaRestart),
-		"disk":            a.diskSummary(), "updates": map[string]any{"count": d.Updates.count(), "checked": d.Updates.Checked, "items": d.Updates.Items},
+		"autheliaRestart": autheliaRestartView(d.AutheliaRestart), "autoUpdateLast": d.AutoUpdateLast,
+		"disk": a.diskSummary(), "updates": map[string]any{"count": d.Updates.count(), "checked": d.Updates.Checked, "items": d.Updates.Items},
 		"me":       a.meOf(r, &d),
 		"security": map[string]any{"totp": myTOTP(a, r, &d), "selfName": d.SelfName, "via": accessOf(r.Context()).via, "ssoUser": accessOf(r.Context()).ssoUser},
 	})
@@ -836,6 +837,8 @@ func (a *App) update(target string, st Settings, L *logger) error {
 		ctr, dir, svc, env = st.CaddyContainer, st.CaddyStackDir, st.CaddyService, caddyComposeEnv()
 	case "authelia":
 		ctr, dir, svc = st.AutheliaCtr, st.AutheliaStackDir, st.AutheliaService
+	case "crowdsec":
+		ctr = st.CrowdSecContainer
 	default:
 		return errors.New("알 수 없는 대상")
 	}
@@ -849,27 +852,29 @@ func (a *App) update(target string, st Settings, L *logger) error {
 		return errors.New("Cloudflare 토큰이 길목에 없어 Caddy 업데이트를 중단합니다 (compose 파일이 ${CLOUDFLARE_API_TOKEN}을 씁니다)")
 	}
 	before := ctrID(ctr)
+	oldImage, ref := ctrImage(ctr) // to put back when the new one does not come up
+	keepPrevious(oldImage, ref, L.f)
 	since := time.Now()
 	if err := composeUpdate(t, env, L.f); err != nil {
+		if after := ctrID(ctr); after != before && before != "" { // recreated, then failed
+			if e := rollbackImage(t, env, oldImage, ref, L.f); e != nil {
+				L.f("✗ 되돌리기 실패: %v", e)
+			}
+		}
 		return err
 	}
 	if after := ctrID(ctr); after == before && before != "" {
 		L.f("✓ 이미 최신 이미지 — 컨테이너를 다시 만들지 않았습니다")
 		return nil
 	}
-	switch target {
-	case "caddy":
-		time.Sleep(3 * time.Second)
-		if v, e := ctrExec(ctr, nil, "caddy", "version"); e == nil {
-			L.f("✓ Caddy %s", strings.Fields(v + " ")[0])
-		} else {
-			return fmt.Errorf("새 Caddy 컨테이너 확인 실패: %s", oneLine(v))
+	if err := a.verifyUpdated(target, ctr, since, L); err != nil {
+		L.f("✗ %v", err)
+		if e := rollbackImage(t, env, oldImage, ref, L.f); e != nil {
+			L.f("✗ 되돌리기 실패: %v — 컨테이너를 직접 확인하세요", e)
+			return fmt.Errorf("새 이미지가 정상 시작하지 못했고 되돌리기도 실패했습니다: %v", err)
 		}
-	case "authelia":
-		if err := waitHealthy(ctr, since, "Startup complete", 60*time.Second); err != nil {
-			return err
-		}
-		L.f("✓ Authelia 정상 시작")
+		L.f("✓ 이전 이미지로 되돌렸습니다")
+		return fmt.Errorf("새 이미지가 정상 시작하지 못해 이전 이미지로 되돌렸습니다: %v", err)
 	}
 	return nil
 }
@@ -919,7 +924,8 @@ func systemSettingKey(k string) bool {
 	case "caddyfilePath", "caddyfileInCtr", "caddyContainer", "autheliaContainer", "autheliaConfig", "autheliaUsers",
 		"autheliaCtrDir", "caddyStackDir", "autheliaStackDir", "caddyService", "autheliaService",
 		"crowdsecContainer", "crowdsecLapi", "caddyMode", "caddyBin", "caddyAdmin", "caddyLogFile", "caddyLogRead",
-		"autheliaMode", "autheliaURL", "autheliaLogFile", "crowdsecMode", "crowdsecMachine":
+		"autheliaMode", "autheliaURL", "autheliaLogFile", "crowdsecMode", "crowdsecMachine",
+		"autoUpdateCaddy", "autoUpdateAuthelia", "autoUpdateCrowdSec", "autoUpdateHour":
 		return true
 	}
 	return strings.HasPrefix(k, "use")
@@ -1144,6 +1150,9 @@ func normalizeSettings(p *Settings) error {
 	}
 	in.CaddyAdmin = strings.TrimRight(strings.TrimSpace(in.CaddyAdmin), "/")
 	in.CaddyLogFile, in.CaddyLogRead = strings.TrimSpace(in.CaddyLogFile), strings.TrimSpace(in.CaddyLogRead)
+	if in.AutoUpdateHour < 0 || in.AutoUpdateHour > 23 {
+		return errors.New("자동 업데이트 시각은 0~23시 사이로 고르세요")
+	}
 	if in.AutheliaMode != "" && in.AutheliaMode != "external" {
 		return fmt.Errorf("Authelia 위치가 올바르지 않습니다: %s", in.AutheliaMode)
 	}

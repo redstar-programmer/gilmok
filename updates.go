@@ -58,7 +58,8 @@ func (a *App) updatesLoop() {
 		if d.Settings.UpdateCheck && time.Since(d.Updates.Checked) > 12*time.Hour {
 			a.checkUpdates()
 		}
-		time.Sleep(30 * time.Minute)
+		a.autoUpdateTick(time.Now())
+		time.Sleep(10 * time.Minute)
 	}
 }
 

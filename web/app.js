@@ -759,9 +759,28 @@ function hoverTip(trigger, render) {
   return wrap;
 }
 
-const UPD_TARGET = { caddy: ['Caddy', 'caddy'], authelia: ['Authelia', 'authelia'], crowdsec: ['CrowdSec', null] };
+const UPD_TARGET = { caddy: ['Caddy', 'caddy'], authelia: ['Authelia', 'authelia'], crowdsec: ['CrowdSec', 'crowdsec'] };
 
 /** Update overview: what can be updated, with a link to the in-app update step. */
+/** automatic image updates: per component, once a day at a chosen hour; the last run's results */
+function autoUpdateBox() {
+  const st = settings();
+  const comps = [['autoUpdateCaddy', 'Caddy', use('caddy') && (!st.caddyMode || st.caddyMode === 'docker')],
+    ['autoUpdateAuthelia', 'Authelia', use('authelia') && st.autheliaMode !== 'external'],
+    ['autoUpdateCrowdSec', 'CrowdSec', use('crowdsec') && st.crowdsecMode !== 'external']].filter((c) => c[2]);
+  if (!comps.length) return null;
+  const last = S.state.autoUpdateLast;
+  const form = settingsForm([
+    ...comps.map(([key, label]) => ({ key, type: 'switch', label: `${label} 자동 업데이트` })),
+    { key: 'autoUpdateHour', type: 'select', num: true, label: '실행 시각 (매일)', options: Array.from({ length: 24 }, (_, i) => [String(i), `${String(i).padStart(2, '0')}:00`]) },
+  ], { grid: false });
+  return h('div', { class: 'section-box stack' },
+    h('h3', null, icon('refresh'), '자동 업데이트'),
+    h('p', { class: 'small muted' }, '켜 둔 구성요소에 새 이미지가 있으면 매일 정한 시각에 바꿉니다 — 버튼으로 하는 업데이트와 같은 과정(받기·빌드 → 다시 만들기 → 정상 시작 확인)이고, 새 이미지가 정상 시작하지 못하면 이전 이미지로 되돌립니다. 결과는 로그 탭 › 시스템에 남습니다.'),
+    form,
+    last ? h('p', { class: 'small' }, `마지막 자동 실행 ${fmtTime(last.at)} — ${(last.results || []).join(' · ')}`) : null);
+}
+
 async function openUpdates() {
   const body = h('div', { class: 'stack' });
   const close = h('button', { type: 'button', class: 'btn primary' }, '닫기');
@@ -773,19 +792,26 @@ async function openUpdates() {
     body.replaceChildren(
       h('p', { class: 'muted small' }, u.checked && !u.checked.startsWith('0001') ? `마지막 확인 ${fmtTime(u.checked)} · 레지스트리의 최신 이미지와 비교 (12시간마다 자동)` : '아직 확인하지 않았습니다'),
       items.length ? h('ul', { class: 'checks' }, items.map((it) => {
-        const [label, tab] = UPD_TARGET[it.target] || [it.target, null];
-        const go = tab && it.available ? h('button', { type: 'button', class: 'btn sm primary' }, '업데이트하러 가기') : null;
-        if (go) go.addEventListener('click', () => { dlg.close(); gotoTab(tab, 'update'); });
+        const [label] = UPD_TARGET[it.target] || [it.target];
+        // update right here (same as the component tab: pull / build → recreate → check, back to the old image on failure)
+        const go = it.available && can('system') ? h('button', { type: 'button', class: 'btn sm primary' }, '지금 업데이트') : null;
+        if (go) go.addEventListener('click', () => busy(go, async () => {
+          let res;
+          try { res = await api('POST', '/api/system/update', { target: it.target }); } catch (ex) { res = { ok: false, error: ex.message, log: [] }; }
+          try { await refreshState(); } catch { /* ignore */ }
+          toast(res.ok ? `${label} 업데이트 완료` : `${label} 업데이트 실패 — ${res.error || ''}`, res.ok ? 'ok' : 'err', 9000);
+          draw((S.state && S.state.updates) || {});
+        }));
         const st = it.err ? 'warn' : it.available ? 'warn' : 'ok';
         return h('li', { class: `chk ${st}` },
           h('span', { class: 'chk-mark', 'aria-hidden': 'true' }, it.err ? '?' : it.available ? '↑' : '✓'),
           h('div', { class: 'chk-text' },
             h('b', null, `${label} · ${it.container} `, it.available ? h('span', { class: 'badge warn' }, '새 버전 있음') : it.err ? h('span', { class: 'badge muted' }, '확인 불가') : h('span', { class: 'badge ok' }, '최신')),
             h('span', { class: 'chk-detail mono' }, `${it.built ? '베이스 ' : ''}${it.image}${it.local ? ` · 현재 ${it.local}` : ''}${it.remote ? ` · 최신 ${it.remote}` : ''}`),
-            it.err ? h('span', { class: 'chk-detail' }, it.err) : null,
-            !tab && it.available ? h('span', { class: 'chk-detail' }, 'CrowdSec은 앱 안에서 업데이트하지 않습니다 — CrowdSec compose 폴더에서 docker compose pull 후 up -d (길목 배포 스크립트를 쓴다면 다시 실행)') : null),
+            it.err ? h('span', { class: 'chk-detail' }, it.err) : null),
           go);
-      })) : h('p', { class: 'muted' }, '확인할 컨테이너가 없습니다. 「지금 확인」을 눌러 보세요.'));
+      })) : h('p', { class: 'muted' }, '확인할 컨테이너가 없습니다. 「지금 확인」을 눌러 보세요.'),
+      autoUpdateBox());
   };
   draw((S.state && S.state.updates) || {});
   check.addEventListener('click', () => busy(check, async () => {
@@ -2384,7 +2410,8 @@ function updateBlock(target, onState) {
     h('p', { class: 'small muted' }, '이미지 업데이트는 서비스 설정과 분리되어 있습니다. 기본 골격·서비스는 그대로 두고 컨테이너만 최신 버전으로 바꿉니다.'),
     info,
     h('div', { class: 'row' }, upd, recheck, h('span', { class: 'grow' }), force),
-    h('details', null, h('summary', { class: 'small muted', style: { cursor: 'pointer' } }, '고급: 폴더 직접 지정 · 수동 명령'), h('div', { class: 'stack', style: { marginTop: '12px' } }, form, help)));
+    h('details', null, h('summary', { class: 'small muted', style: { cursor: 'pointer' } }, '고급: 폴더 직접 지정 · 수동 명령'), h('div', { class: 'stack', style: { marginTop: '12px' } }, form, help)),
+    autoUpdateBox());
 }
 
 function gotoTab(name, stepId) {

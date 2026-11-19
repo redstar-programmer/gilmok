@@ -452,6 +452,72 @@ func TestScnUpdates(t *testing.T) {
 	if err := f.app.update("caddy", st, L); err != nil || !strings.Contains(strings.Join(L.lines, "\n"), "이미 최신") {
 		t.Fatalf("UPD-05: %v %v", err, L.lines)
 	}
+	// UPD-12: the new container does not come up → the previous image goes back under its name
+	verifyPause = time.Millisecond
+	defer func() { verifyPause = 3 * time.Second }()
+	keep := dockerRun
+	ids := []string{"id-1"}
+	var tagged, recreated string
+	dockerRun = func(ctx context.Context, stdin []byte, env []string, args ...string) (string, error) {
+		j := strings.Join(args, " ")
+		switch {
+		case strings.Contains(j, "{{.Image}}|{{.Config.Image}}"):
+			return "sha256:oldimage|gilmok-caddy:local", nil
+		case strings.Contains(j, "{{.Id}}"):
+			return ids[len(ids)-1], nil
+		case strings.HasPrefix(j, "compose") && strings.Contains(j, " up -d"):
+			if strings.Contains(j, "--pull never") {
+				recreated = j
+			} else {
+				ids = append(ids, "id-2") // the update recreated the container
+			}
+			return "ok", nil
+		case strings.HasPrefix(j, "exec cad caddy version"):
+			return "exec failed: container restarting", fmt.Errorf("exit 1")
+		case strings.HasPrefix(j, "tag "):
+			tagged = j
+			return "", nil
+		}
+		return keep(ctx, stdin, env, args...)
+	}
+	L = &logger{}
+	err := f.app.update("caddy", st, L)
+	dockerRun = keep
+	if err == nil || !strings.Contains(err.Error(), "되돌렸습니다") || tagged != "tag gilmok-caddy:gilmok-prev gilmok-caddy:local" || recreated == "" {
+		t.Fatalf("UPD-12 rollback: err=%v tagged=%q recreated=%q\n%s", err, tagged, recreated, strings.Join(L.lines, "\n"))
+	}
+
+	// AUTO-01: once a day in the chosen hour, only components switched on, results kept
+	now := time.Now()
+	f.set(func(d *Data) {
+		d.Settings = st
+		d.Settings.UseCaddy, d.Settings.AutoUpdateCaddy, d.Settings.AutoUpdateHour = true, true, (now.Hour()+1)%24
+		d.AutoUpdateDay, d.AutoUpdateLast = "", nil
+	})
+	f.app.autoUpdateTick(now)
+	if f.app.store.Snapshot().AutoUpdateLast != nil {
+		t.Fatal("AUTO-01: ran outside its hour")
+	}
+	f.set(func(d *Data) { d.Settings.AutoUpdateHour = now.Hour() })
+	prevCheck := autoCheck
+	autoCheck = func(*App) UpdateInfo { // a newer image for caddy (the update runs: same id → 「이미 최신」)
+		return UpdateInfo{Items: []UpdItem{{Target: "caddy", Available: true}, {Target: "authelia", Available: true}}}
+	}
+	defer func() { autoCheck = prevCheck }()
+	f.app.autoUpdateTick(now)
+	last := f.app.store.Snapshot().AutoUpdateLast
+	if last == nil || !last.OK || len(last.Results) != 1 || !strings.Contains(last.Results[0], "caddy: 업데이트됨") {
+		t.Fatalf("AUTO-01 run: %+v", last)
+	}
+	f.set(func(d *Data) { d.AutoUpdateLast = nil })
+	f.app.autoUpdateTick(now)
+	if f.app.store.Snapshot().AutoUpdateLast != nil {
+		t.Fatal("AUTO-01: ran twice the same day")
+	}
+	if got := autoUpdateTargets(Settings{UseCaddy: true, AutoUpdateCaddy: true, CaddyMode: "api"}); len(got) != 0 {
+		t.Errorf("AUTO-01: a Caddy outside Docker is never updated: %v", got)
+	}
+
 	// UPD-09: the symlink is made once even when asked twice at once
 	root := t.TempDir()
 	target := filepath.Join(root, "local")

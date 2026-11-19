@@ -1,0 +1,72 @@
+# Publish the Caddy image Gilmok installs: vitive/gilmok-caddy (linux/amd64, linux/arm64) —
+# Caddy + Cloudflare DNS + Coraza WAF + GeoIP, built from deploy/caddy/Dockerfile.
+#
+# Runs every day: builds when Caddy released a version that is not on Docker Hub yet; on Sundays
+# it also rebuilds the current version so base-image (OS) fixes arrive. A change to the Dockerfile
+# (new module) rebuilds right away. By hand: Actions › caddy image › Run workflow (force).
+# Tags: <caddy version> (2.10.2), <minor> (2.10), latest.
+# Uses the same secrets as docker.yml (DOCKERHUB_USERNAME / DOCKERHUB_TOKEN).
+name: caddy image
+
+on:
+  schedule:
+    - cron: "23 4 * * *"
+  push:
+    branches: [main]
+    paths: ["deploy/caddy/Dockerfile", ".github/workflows/caddy.yml"]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Build even if this Caddy version is already published"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  caddy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Which Caddy, and is it published already?
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          V=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/caddyserver/caddy/releases/latest | jq -r .tag_name | sed 's/^v//')
+          case "$V" in ""|null) echo "could not read the Caddy version"; exit 1;; esac
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "minor=${V%.*}" >> "$GITHUB_OUTPUT"
+          build=false
+          if ! curl -fsS -o /dev/null "https://hub.docker.com/v2/repositories/vitive/gilmok-caddy/tags/$V"; then build=true; fi
+          [ "${{ github.event_name }}" = "push" ] && build=true
+          [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force }}" = "true" ] && build=true
+          [ "${{ github.event_name }}" = "schedule" ] && [ "$(date -u +%u)" = "7" ] && build=true
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "Caddy $V → build=$build"
+      - if: steps.v.outputs.build == 'true'
+        uses: docker/setup-buildx-action@v3
+      - if: steps.v.outputs.build == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - if: steps.v.outputs.build == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/caddy
+          platforms: linux/amd64,linux/arm64
+          pull: true
+          push: true
+          build-args: |
+            CADDY_VERSION=${{ steps.v.outputs.version }}
+          tags: |
+            vitive/gilmok-caddy:${{ steps.v.outputs.version }}
+            vitive/gilmok-caddy:${{ steps.v.outputs.minor }}
+            vitive/gilmok-caddy:latest
+          labels: |
+            org.opencontainers.image.version=${{ steps.v.outputs.version }}
+          cache-from: type=gha,scope=caddy
+          cache-to: type=gha,scope=caddy,mode=max

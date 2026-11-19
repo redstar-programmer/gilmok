@@ -141,9 +141,14 @@ type Settings struct {
 	CrowdSecContainer string `json:"crowdsecContainer"` // e.g. crowdsec
 	CrowdSecMode      string `json:"crowdsecMode"`      // "" = a Docker container, "external" = reached through the LAPI only
 	CrowdSecMachine   string `json:"crowdsecMachine"`   // external: machine account for manual decisions (password in <data>/secrets)
-	CrowdSecLAPI      string `json:"crowdsecLapi"`      // e.g. http://crowdsec:8080
-	CrowdSecSync      bool   `json:"crowdsecSync"`      // push bans to Cloudflare
-	CrowdSecInterval  int    `json:"crowdsecInterval"`  // seconds
+	// automatic image updates (autoupdate.go): per component, once a day at AutoUpdateHour (local)
+	AutoUpdateCaddy    bool   `json:"autoUpdateCaddy"`
+	AutoUpdateAuthelia bool   `json:"autoUpdateAuthelia"`
+	AutoUpdateCrowdSec bool   `json:"autoUpdateCrowdSec"`
+	AutoUpdateHour     int    `json:"autoUpdateHour"`
+	CrowdSecLAPI       string `json:"crowdsecLapi"`     // e.g. http://crowdsec:8080
+	CrowdSecSync       bool   `json:"crowdsecSync"`     // push bans to Cloudflare
+	CrowdSecInterval   int    `json:"crowdsecInterval"` // seconds
 
 	// Components in use. Every deployment differs (Caddy only, Caddy + Authelia, DNS only, …):
 	// nothing else in the app may assume a component exists unless its flag is on.
@@ -245,6 +250,8 @@ type TopoHop struct {
 }
 
 type Data struct {
+	AutoUpdateDay   string                   `json:"autoUpdateDay,omitempty"`   // the day the automatic update last ran (local date)
+	AutoUpdateLast  *AutoUpdateRun           `json:"autoUpdateLast,omitempty"`  // its results
 	AutheliaRestart *AutheliaRestart         `json:"autheliaRestart,omitempty"` // Authelia outside Docker: a change waiting for its restart
 	geoDB           string                   // runtime: the GeoIP database path inside Caddy, set when Caddy can use it
 	Settings        Settings                 `json:"settings"`
@@ -331,6 +338,7 @@ func baseSettings() Settings {
 		CfAsnList:         "",
 		CfAsnAction:       "managed_challenge",
 		CrowdSecContainer: "crowdsec",
+		AutoUpdateHour:    4,
 		CrowdSecLAPI:      "http://crowdsec:8080",
 		CrowdSecInterval:  60,
 		DashLogs:          true, // new installs; older data files keep false until turned on

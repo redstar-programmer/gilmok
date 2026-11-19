@@ -51,7 +51,7 @@ Public sites that do not go through Cloudflare can be blocked by the visitor's c
 Requests per minute, 5xx rate, p95 response time, status codes over time, whether each service responds, container resources, certificate expiry, top client IPs and countries, and a world map of requests and refusals per country, all as widgets. Every request records the client IP and country (from Cloudflare on Proxied sites, otherwise from a free country database Gilmok downloads). An audit log of who changed what, plus security and system logs, is kept in SQLite and recording is cut back when disk space runs low.
 
 ### Install what's missing
-No Caddy, Authelia or CrowdSec yet? Gilmok installs them as sibling containers and wires up the connection settings. You can still edit their compose files from the UI afterwards.
+No Caddy, Authelia or CrowdSec yet? Gilmok installs them as sibling containers and wires up the connection settings. You can still edit their compose files from the UI afterwards. Caddy uses the published [vitive/gilmok-caddy](https://hub.docker.com/r/vitive/gilmok-caddy) image (Cloudflare DNS, Coraza WAF and GeoIP modules). New images can be applied automatically at a chosen hour, and the previous image is put back if a new one does not start.
 
 ### Diagram
 Draws the path from the internet through Cloudflare, your router and Caddy to each service. Lines to services that don't respond turn into still dashed lines.
@@ -133,7 +133,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Settings and logs stay in `./data`. To pin a version, change the image in the compose file to something like `vitive/gilmok:0.1.16`.
+Settings and logs stay in `./data`. To pin a version, change the image in the compose file to something like `vitive/gilmok:0.1.17`.
 
 ## Environment variables
 

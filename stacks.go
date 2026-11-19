@@ -454,7 +454,7 @@ func (a *App) stackInstall(name string, o map[string]string, log func(string, ..
 	if out, err := stackCompose(ctx, k, dir, env, "config", "-q"); err != nil {
 		return fmt.Errorf("만든 compose 파일이 올바르지 않습니다: %s", oneLine(lastLines(out, 3)))
 	}
-	if k.build {
+	if k.build && composeBuilds(dir) {
 		log("$ docker compose build --pull  (처음엔 몇 분 걸립니다 — 진행 내용이 아래에 이어집니다)")
 		bctx := withLineSink(ctx, func(l string) { log("  %s", truncate(l, 200)) })
 		out, err := stackCompose(bctx, k, dir, append(env, "BUILDKIT_PROGRESS=plain"), "build", "--pull")
@@ -770,4 +770,18 @@ func crashReason(logs string) string {
 		}
 	}
 	return ""
+}
+
+// composeBuilds: the stack's compose.yml builds its image (a build: section) instead of pulling one.
+func composeBuilds(dir string) bool {
+	b, err := os.ReadFile(filepath.Join(dir, "compose.yml"))
+	if err != nil {
+		return true
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "build:") {
+			return true
+		}
+	}
+	return false
 }
