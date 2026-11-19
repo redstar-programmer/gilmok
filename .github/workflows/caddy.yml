@@ -6,6 +6,10 @@
 # (new module) rebuilds right away. By hand: Actions › caddy image › Run workflow (force).
 # Tags: <caddy version> (2.10.2), <minor> (2.10), latest.
 # Uses the same secrets as docker.yml (DOCKERHUB_USERNAME / DOCKERHUB_TOKEN).
+#
+# Keep-alive: GitHub turns off scheduled workflows of a public repository after 60 days without
+# activity. Every run switches this workflow on again through the API (job keepalive), which
+# resets that timer — no commits, no third-party action, only the run's own token.
 name: caddy image
 
 on:
@@ -25,10 +29,25 @@ permissions:
   contents: read
 
 jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Keep the daily schedule switched on
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/caddy.yml/enable"
+          echo "caddy.yml enabled — the 60-day inactivity timer starts again"
+
   caddy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # a push builds only when the Dockerfile changed (git diff below)
       - name: Which Caddy, and is it published already?
         id: v
         env:
@@ -41,7 +60,7 @@ jobs:
           echo "minor=${V%.*}" >> "$GITHUB_OUTPUT"
           build=false
           if ! curl -fsS -o /dev/null "https://hub.docker.com/v2/repositories/vitive/gilmok-caddy/tags/$V"; then build=true; fi
-          [ "${{ github.event_name }}" = "push" ] && build=true
+          if [ "${{ github.event_name }}" = "push" ] && git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" -- deploy/caddy/Dockerfile | grep -q .; then build=true; fi
           [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.force }}" = "true" ] && build=true
           [ "${{ github.event_name }}" = "schedule" ] && [ "$(date -u +%u)" = "7" ] && build=true
           echo "build=$build" >> "$GITHUB_OUTPUT"
