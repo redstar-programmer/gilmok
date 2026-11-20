@@ -387,6 +387,8 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
   //      of them; Tailscale / VPN only those marked tailnet. No devices yet → one 「?」 to add.
   const P = PRIV_KINDS[M.pk];
   const hopsDraw = M.hops.length ? M.hops : [null];
+  const hopsShown = pin443 != null || !!ts; // the device row is drawn (it carries public / private traffic)
+  let csTop = Infinity; // top of the CrowdSec box (inside the host region) when shown
   const tsHopIdx = ts ? hopsDraw.map((x, i) => (x === null || x.tailnet ? i : -1)).filter((i) => i >= 0) : [];
   const viaHops = tsHopIdx.length > 0;
   const rY = pin443 != null && viaHops ? (Y(pin443) + Y(pin8443)) / 2 : pin443 != null ? Y(pin443) : ts ? Y(pin8443) : 0;
@@ -507,15 +509,42 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
     edge(X.tsd + TW, cy, X.caddy, cy, tw ? TC.warn : TC.ts, tsItems);
   }
 
-  // ---- CrowdSec loop (logs → decisions → Cloudflare list)
+  // ---- CrowdSec loop (logs → decisions → Cloudflare list). CrowdSec is a container on this host:
+  // drawn above Caddy inside the host region. The decisions reach Cloudflare through Gilmok's API
+  // calls, which leave the host like any outbound traffic — through the front devices.
   if (csOn) {
-    const cx = X.router, cy = 54;
-    node(cx, cy, NW + 20, NH, { title: 'CrowdSec', sub: set.crowdsecSync ? '차단 → Cloudflare' : '분석만', iconName: 'radar', color: TC.danger, list: orangeItems, ctr: 'crowdsec', title2: 'mTLS 사이트 접근 로그(실제 IP)를 분석해 공격 IP를 판정' });
-    edge(X.caddy + CW / 2, boxTop, cx + NW + 20, cy, TC.danger, orangeItems, { dashed: true, static: true, d: `M${X.caddy + CW / 2} ${boxTop} C${X.caddy + CW / 2} ${cy} ${X.caddy + CW / 2} ${cy} ${cx + NW + 22} ${cy}`, label: '접근 로그', labelDy: 0 });
+    const CSW = NW + 20;
+    const cx = X.caddy + (CW - CSW) / 2, cy = boxTop - NH / 2 - 44;
+    csTop = cy - NH / 2;
+    node(cx, cy, CSW, NH, { title: 'CrowdSec', sub: set.crowdsecSync ? '차단 → Cloudflare' : '분석만', iconName: 'radar', color: TC.danger, list: orangeItems, ctr: 'crowdsec', title2: 'mTLS 사이트 접근 로그(실제 IP)를 분석해 공격 IP를 판정 — 길목이 판정을 읽어 Cloudflare IP 목록으로 보냅니다' });
+    edge(0, 0, 0, 0, TC.danger, orangeItems, { dashed: true, static: true, d: `M${X.caddy + CW / 2} ${boxTop} L${X.caddy + CW / 2} ${cy + NH / 2 + 2}` });
+    label(X.caddy + CW / 2, (boxTop + cy + NH / 2) / 2, '접근 로그', TC.danger, orangeItems);
     if (set.crowdsecSync && cfY != null && orangeItems.length) {
       const ty = Y(cfY) - NH / 2 - 10;
-      edge(cx, cy, X.edge + NW / 2, ty, TC.danger, orangeItems, { dashed: true, static: true, d: `M${cx} ${cy} C${X.edge + NW / 2} ${cy} ${X.edge + NW / 2} ${cy} ${X.edge + NW / 2} ${ty}`, label: '차단 목록' });
+      if (hopsShown) {
+        egress(cx, cy, 'top', X.edge + NW / 2, ty, TC.danger, orangeItems, '차단 목록 (길목이 전송)', (cx + hx(hopsDraw.length - 1) + HW) / 2 + 30, cy - 14);
+      } else {
+        edge(cx, cy, X.edge + NW / 2, ty, TC.danger, orangeItems, { dashed: true, static: true, d: `M${cx} ${cy} C${X.edge + NW / 2} ${cy} ${X.edge + NW / 2} ${cy} ${X.edge + NW / 2} ${ty}`, label: '차단 목록 (길목이 전송)' });
+      }
     }
+  }
+
+  // outbound traffic from this host (API calls) leaves through the front devices, last one first.
+  // side 'top' runs above the device row, 'bottom' below it; dashed, no flow animation.
+  // The route: straight out of the source to the nearest device, into it from above / below, out of
+  // the farthest one beside where it came in, then on to the destination. (lx, ly) = label position.
+  function egress(sx, sy, side, tx, ty, color, list, text, lx, ly) {
+    const hy = side === 'top' ? rY - NH / 2 : rY + NH / 2;
+    // in near a device's right edge, out near its left one (the middle keeps the 「+ 앞단 장비」 button clear)
+    const lefts = hopsDraw.map((_, i) => hx(i)).reverse(); // nearest the host first
+    const s = side === 'top' ? -1 : 1;
+    const inX = lefts[0] + HW - 16;
+    let d = `M${sx} ${sy} L${inX + 16} ${sy} Q${inX} ${sy} ${inX} ${sy - s * 16} L${inX} ${hy}`;
+    for (let i = 1; i < lefts.length; i++) d += ` M${lefts[i - 1] + 16} ${hy} Q${(lefts[i - 1] + lefts[i] + HW) / 2} ${hy + s * 34} ${lefts[i] + HW - 16} ${hy}`;
+    const outX = lefts[lefts.length - 1] + 16;
+    d += ` M${outX} ${hy} C${outX} ${hy + s * 40} ${tx} ${ty - 60} ${tx} ${ty}`; // into the destination's top
+    edge(0, 0, 0, 0, color, list, { d, dashed: true, static: true });
+    label(lx, ly, text, color, list);
   }
 
   // ---- groups + leaves
@@ -633,7 +662,12 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
       const cy = gilY + ROWB;
       node(X.edge, cy, NW, NH, { title: 'Cloudflare API', sub: 'DNS · WAF 규칙', iconName: 'cloud', color: TC.orange,
         title2: `길목이 API 토큰으로 ${set.domain || '도메인'} 존의 DNS 레코드와 WAF 규칙을 바꿉니다${use('crowdsec') && set.crowdsecSync ? ' (CrowdSec 차단 목록 포함)' : ''}` });
-      manage(`M${gilX + 30} ${gilY + GLH / 2} C${gilX + 30} ${cy} ${gilX + 30} ${cy} ${X.edge + NW + 2} ${cy}`, use('crowdsec') && set.crowdsecSync ? 'DNS·WAF·차단 목록' : 'DNS·WAF 규칙', (X.edge + NW + gilX + 30) / 2, cy - 14);
+      const apiText = use('crowdsec') && set.crowdsecSync ? 'DNS·WAF·차단 목록 (API)' : 'DNS·WAF 규칙 (API)';
+      if (hopsShown) {
+        egress(gilX, gilY - GLH / 2 + 12, 'bottom', X.edge + NW / 2, cy - NH / 2 - 2, VIOLET, [], apiText, X.edge + NW / 2 + 70, cy - NH / 2 - 30);
+      } else {
+        manage(`M${gilX + 30} ${gilY + GLH / 2} C${gilX + 30} ${cy} ${gilX + 30} ${cy} ${X.edge + NW + 2} ${cy}`, apiText, (X.edge + NW + gilX + 30) / 2, cy - 14);
+      }
       hostExtraBottom = Math.max(hostExtraBottom, cy + NH / 2);
     }
     // people reach it: directly on the host …
@@ -673,7 +707,7 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
   // ---- host boundary: everything from Caddy to the services runs on this host
   {
     const leafTops = [...leafPos.values()].map((v) => Y(v) - LH / 2);
-    const rTop = Math.min(boxTop, ...leafTops) - 40;
+    const rTop = Math.min(boxTop, csTop, ...leafTops) - 40;
     const rBot = Math.max(...[...leafPos.values()].map((v) => Y(v) + LH / 2), caddyBox.bottom, hostExtraBottom) + 16;
     const rx = (ts ? X.tsd : X.caddy) - 22; // the Tailscale / VPN endpoint runs on this host too
     const hostName = (set.topoHostName || '').trim();
@@ -743,6 +777,21 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
     fit.addEventListener('click', () => { store('gm.topoZoom', 'fit'); repaint(); });
     return h('div', { class: 'seg-mini', role: 'group', 'aria-label': '확대·축소' }, minus, fit, plus);
   })();
+  // flow animation: auto (follows the OS "reduce motion" setting) / on / off — per browser
+  const motionOf = () => { try { return localStorage.getItem('gm.topoMotion') || 'auto'; } catch { return 'auto'; } };
+  const motionCtl = (() => {
+    const cur = motionOf();
+    const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const opt = (v, text, title) => {
+      const b = h('button', { type: 'button', role: 'radio', 'aria-checked': String(cur === v), class: cur === v ? 'on' : '', title }, text);
+      b.addEventListener('click', () => { if (cur !== v) { store('gm.topoMotion', v); repaint(); } });
+      return b;
+    };
+    return h('div', { class: 'seg-mini', role: 'radiogroup', 'aria-label': '흐름 애니메이션' }, h('span', { class: 'small muted' }, '흐름'),
+      opt('auto', reduced ? '자동 (멈춤)' : '자동', reduced ? '이 컴퓨터는 「동작 줄이기」(애니메이션 효과 끔 · 원격 데스크톱)라 멈춰 있습니다 — 「켜기」로 움직이게 할 수 있습니다' : '운영체제의 「동작 줄이기」 설정을 따릅니다'),
+      opt('on', '켜기', '운영체제 설정과 상관없이 흐름을 움직입니다'),
+      opt('off', '끄기', '흐름을 멈춥니다 (점선은 남음)'));
+  })();
   const blindBtn = (() => {
     const on = blindOn();
     const b = h('button', { type: 'button', class: on ? 'on' : '', 'aria-pressed': String(on), title: 'IP·도메인·대상 주소·호스트 이름을 가립니다 (스크린샷 공유용)' }, on ? '가림 켜짐' : '주요 정보 가리기');
@@ -752,7 +801,7 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
   // controls (left) and the read-only summary (right, plain text) are kept apart so the counts
   // do not look like more buttons
   const sum = h('div', { class: 'topo-sum' },
-    h('div', { class: 'topo-tools', role: 'toolbar', 'aria-label': '구성도 보기' }, modeSel, zoomCtl, blindBtn),
+    h('div', { class: 'topo-tools', role: 'toolbar', 'aria-label': '구성도 보기' }, modeSel, zoomCtl, motionCtl, blindBtn),
     h('div', { class: 'topo-stats', role: 'group', 'aria-label': '현황' }, h('span', { class: 'topo-stats-label' }, '현황'),
     h('span', { class: 'badge' }, `서비스 ${en.length}/${all.length}`),
     (() => { const hs = all.map(healthOf).filter(Boolean); const down = hs.filter((x) => x.st === 'down').length; if (!hs.length) return null; if (S.caddyRun && S.caddyRun.down) return h('span', { class: 'badge danger' }, `✗ Caddy 중단 — 접속 불가 ${down}`); return h('span', { class: `badge ${down ? 'danger' : 'ok'}` }, down ? `✗ 응답 없음 ${down}` : `● 모두 정상 ${hs.length}`); })(),
@@ -779,7 +828,8 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
     svg.style.width = `${Math.round(width * parseFloat(z))}px`;
     svg.style.minWidth = '0';
   }
-  const out = h('div', { class: `glass topo ${blindOn() ? 'blind' : ''}` }, sum, notes.length ? h('div', { class: 'stack topo-notes' }, notes) : null, h('div', { class: 'topo-scroll' }, svg), legend);
+  const mo = motionOf();
+  const out = h('div', { class: `glass topo ${blindOn() ? 'blind' : ''} ${mo === 'on' ? 'motion-on' : mo === 'off' ? 'motion-off' : ''}` }, sum, notes.length ? h('div', { class: 'stack topo-notes' }, notes) : null, h('div', { class: 'topo-scroll' }, svg), legend);
   if (blindOn()) blindTopo(out, set, all);
   return out;
 }

@@ -620,7 +620,10 @@ tr.disabled td { opacity: .55; }
 .topo-svg .edge.flow { stroke-dasharray: 7 9; animation: topo-flow 1.6s linear infinite; }
 .topo-svg .edge.idle { stroke-dasharray: 2 5; stroke-linecap: round; stroke-opacity: .55; animation: none; }
 @keyframes topo-flow { to { stroke-dashoffset: -32; } }
-@media (prefers-reduced-motion: reduce) { .topo-svg .edge.flow { animation: none; stroke-dasharray: none; } }
+/* "reduce motion" (OS setting, remote desktop): the dashes stay so flowing paths still read as
+   flowing, only the movement stops; the map's own switch (흐름: 켜기 / 끄기) overrides it */
+@media (prefers-reduced-motion: reduce) { .topo:not(.motion-on) .topo-svg .edge.flow { animation: none; } }
+.topo.motion-off .topo-svg .edge.flow { animation: none; }
 .topo-svg .leaf { cursor: pointer; outline: none; }
 .topo-svg .leaf .node-bg { transition: stroke-opacity .15s, fill .15s; }
 .topo-svg .leaf:hover .node-bg, .topo-svg .leaf:focus-visible .node-bg { stroke-opacity: 1; fill: rgb(var(--panel) / .96); }
