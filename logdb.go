@@ -503,6 +503,7 @@ type ReqQuery struct {
 	Before    int64
 	Limit     int
 	SlowFirst bool
+	Filter    *dashFilter // dashboard variables (sites, countries, client paths)
 }
 
 type ReqRow struct {
@@ -536,6 +537,9 @@ func (l *LogDB) QueryRequests(ctx context.Context, q ReqQuery) ([]ReqRow, error)
 			args = append(args, c)
 		}
 		conds = append(conds, "status/100 IN ("+strings.Join(ph, ",")+")")
+	}
+	if fc, fa := q.Filter.sql(); len(fc) > 0 {
+		conds, args = append(conds, fc...), append(args, fa...)
 	}
 	if q.MinMs > 0 {
 		conds, args = append(conds, "ms>=?"), append(args, q.MinMs)

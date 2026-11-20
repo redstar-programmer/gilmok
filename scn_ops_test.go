@@ -201,18 +201,18 @@ func TestScnDashboard(t *testing.T) {
 	if c := d9["c"].(map[string]any); int64(c["to"].(float64)-c["from"].(float64)) > 61_000 {
 		t.Fatalf("DASH-09 scatter window: %v", c)
 	}
-	boss.must(400, "POST", "/api/dash/data", `{"range":"7d","widgets":[]}`)
-	for _, r := range []string{"1m", "5m", "10m", "15m", "30m", "1h", "2h", "3h"} { // the UI's choices (15m = default)
+	boss.must(400, "POST", "/api/dash/data", `{"range":"9d","widgets":[]}`)
+	for _, r := range []string{"1m", "5m", "10m", "15m", "30m", "1h", "2h", "3h", "6h", "12h", "24h", "2d", "7d", "30d"} { // the time picker's quick ranges (15m = default)
 		boss.must(200, "POST", "/api/dash/data", `{"range":"`+r+`","widgets":[]}`)
 	}
-	// DASH-10: a past From~To window — at most a day, start before end
+	// DASH-10: a past From~To window — at most 31 days, start before end
 	b, _ = json.Marshal(map[string]any{"from": now - 2*3600_000, "to": now - 3600_000, "widgets": []Widget{{ID: "c", Type: "scatter", Range: "15m"}, {ID: "h", Type: "health"}}})
 	m = boss.must(200, "POST", "/api/dash/data", string(b))
 	d10 := m["data"].(map[string]any)
 	if c := d10["c"].(map[string]any); c["to"].(float64)-c["from"].(float64) != 3600_000 || d10["h"].(map[string]any)["liveOnly"] != true {
 		t.Fatalf("DASH-10: %v", d10)
 	}
-	boss.must(400, "POST", "/api/dash/data", fmt.Sprintf(`{"from":%d,"to":%d,"widgets":[]}`, now-25*3600_000, now))
+	boss.must(400, "POST", "/api/dash/data", fmt.Sprintf(`{"from":%d,"to":%d,"widgets":[]}`, now-32*24*3600_000, now))
 	boss.must(400, "POST", "/api/dash/data", fmt.Sprintf(`{"from":%d,"to":%d,"widgets":[]}`, now, now-1000))
 	// DASH-11: scatter dots carry their site and request; the request list filters by status class
 	b, _ = json.Marshal(map[string]any{"widgets": []Widget{{ID: "c", Type: "scatter", Range: "15m"}}})

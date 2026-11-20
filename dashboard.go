@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,8 +30,18 @@ type Widget struct {
 	Limit      int      `json:"limit,omitempty"`
 	Containers []string `json:"containers,omitempty"`
 	Warn       float64  `json:"warn,omitempty"` // stat: threshold for the warning state (0 = none)
+	View       string   `json:"view,omitempty"` // how a panel draws its data: health "" (tiles) | donut | bar; containers "" (list) | gauge | bar
+	// display options: "size" s|m|l ("" = fit), "group" each (health ring: one per service), "c.<part>"
+	// #rrggbb colors (health: up slow down; containers: cpu mem). Anything else is dropped.
+	Opts map[string]string `json:"opts,omitempty"`
+	// placement on the 24-column grid (G = 24). G = 0: an older layout of 4 columns (W 1..4, H 1..3,
+	// placed in order) — the UI converts it.
+	X int `json:"x"`
+	Y int `json:"y"`
+	G int `json:"g,omitempty"`
 
 	span time.Duration // the dashboard's range (live "last N" or the past From~To window) over the widget's own; not stored
+	flt  *dashFilter   // the dashboard variables (filters); not stored
 }
 
 // dur: the time window a widget covers — the dashboard-wide range when one is chosen, else its own.
@@ -42,9 +53,10 @@ func (w Widget) dur() time.Duration {
 }
 
 // dashSpans: the whole-dashboard ranges of the live view; the past view takes From~To up to dashMaxWindow.
-var dashSpans = map[string]time.Duration{"1m": time.Minute, "5m": 5 * time.Minute, "10m": 10 * time.Minute, "15m": 15 * time.Minute, "30m": 30 * time.Minute, "1h": time.Hour, "2h": 2 * time.Hour, "3h": 3 * time.Hour}
+var dashSpans = map[string]time.Duration{"1m": time.Minute, "5m": 5 * time.Minute, "10m": 10 * time.Minute, "15m": 15 * time.Minute, "30m": 30 * time.Minute, "1h": time.Hour, "2h": 2 * time.Hour, "3h": 3 * time.Hour,
+	"6h": 6 * time.Hour, "12h": 12 * time.Hour, "24h": 24 * time.Hour, "2d": 48 * time.Hour, "7d": 7 * 24 * time.Hour, "30d": 30 * 24 * time.Hour}
 
-const dashMaxWindow = 24 * time.Hour
+const dashMaxWindow = 31 * 24 * time.Hour
 
 var (
 	widgetTypes   = map[string]bool{"stat": true, "series": true, "scatter": true, "top": true, "health": true, "containers": true, "certs": true, "events": true, "map": true}
@@ -54,22 +66,59 @@ var (
 	ranges        = map[string]time.Duration{"5m": 5 * time.Minute, "15m": 15 * time.Minute, "1h": time.Hour, "6h": 6 * time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour, "30d": 30 * 24 * time.Hour}
 )
 
+// defaultDashboard: the 24-column layout (one row ≈ 40 px).
 func defaultDashboard() []Widget {
+	g := func(w Widget, x, y, wi, he int) Widget { w.X, w.Y, w.W, w.H, w.G = x, y, wi, he, 24; return w }
 	return []Widget{
-		{Type: "stat", Title: "분당 요청", Metric: "rpm", Range: "15m", W: 1, H: 1},
-		{Type: "stat", Title: "5xx 오류율", Metric: "err5xx", Range: "1h", W: 1, H: 1, Warn: 1},
-		{Type: "stat", Title: "응답시간 p95", Metric: "p95Ms", Range: "15m", W: 1, H: 1, Warn: 1000},
-		{Type: "stat", Title: "WAF 차단", Metric: "waf", Range: "24h", W: 1, H: 1},
-		{Type: "scatter", Title: "응답시간 분포", Range: "15m", W: 2, H: 2},
-		{Type: "series", Title: "요청 추이 (상태코드별)", Metric: "status", Range: "1h", W: 2, H: 2},
-		{Type: "health", Title: "서비스 상태", W: 2, H: 2},
-		{Type: "map", Title: "접속 지역", Range: "1h", W: 2, H: 3},
-		{Type: "top", Title: "많이 쓰는 사이트", Dim: "host", Range: "1h", Limit: 8, W: 1, H: 2},
-		{Type: "containers", Title: "컨테이너 리소스", W: 1, H: 2},
-		{Type: "series", Title: "응답시간 추이", Metric: "latency", Range: "1h", W: 2, H: 2},
-		{Type: "certs", Title: "인증서 만료", W: 1, H: 2},
-		{Type: "events", Title: "최근 이벤트", W: 1, H: 2},
+		g(Widget{Type: "stat", Title: "분당 요청", Metric: "rpm", Range: "15m"}, 0, 0, 6, 4),
+		g(Widget{Type: "stat", Title: "5xx 오류율", Metric: "err5xx", Range: "1h", Warn: 1}, 6, 0, 6, 4),
+		g(Widget{Type: "stat", Title: "응답시간 p95", Metric: "p95Ms", Range: "15m", Warn: 1000}, 12, 0, 6, 4),
+		g(Widget{Type: "stat", Title: "WAF 차단", Metric: "waf", Range: "24h"}, 18, 0, 6, 4),
+		g(Widget{Type: "scatter", Title: "응답시간 분포", Range: "15m"}, 0, 4, 14, 10),
+		g(Widget{Type: "series", Title: "요청 추이 (상태코드별)", Metric: "status", Range: "1h"}, 14, 4, 10, 10),
+		g(Widget{Type: "health", Title: "서비스 상태"}, 0, 14, 12, 8),
+		g(Widget{Type: "map", Title: "접속 지역", Range: "1h"}, 12, 14, 12, 12),
+		g(Widget{Type: "series", Title: "응답시간 추이", Metric: "latency", Range: "1h"}, 0, 22, 12, 8),
+		g(Widget{Type: "top", Title: "많이 쓰는 사이트", Dim: "host", Range: "1h", Limit: 8}, 12, 26, 6, 8),
+		g(Widget{Type: "containers", Title: "컨테이너 리소스"}, 18, 26, 6, 8),
+		g(Widget{Type: "certs", Title: "인증서 만료"}, 0, 30, 6, 6),
+		g(Widget{Type: "events", Title: "최근 이벤트"}, 6, 30, 6, 6),
 	}
+}
+
+// widgetViews: the display styles a panel type offers ("" = the default one)
+var widgetViews = map[string]map[string]bool{
+	"health":     {"": true, "donut": true, "bar": true},
+	"containers": {"": true, "gauge": true, "bar": true},
+}
+
+// widgetColorParts: the parts of a panel whose color can be chosen
+var widgetColorParts = map[string]map[string]bool{
+	"health":     {"up": true, "slow": true, "down": true},
+	"containers": {"cpu": true, "mem": true},
+}
+
+var reHexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+func normalizeOpts(w *Widget) {
+	var out map[string]string
+	set := func(k, v string) {
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[k] = v
+	}
+	for k, v := range w.Opts {
+		switch {
+		case k == "size" && widgetViews[w.Type] != nil && (v == "s" || v == "m" || v == "l"):
+			set(k, v)
+		case k == "group" && w.Type == "health" && v == "each":
+			set(k, v)
+		case strings.HasPrefix(k, "c.") && widgetColorParts[w.Type][k[2:]] && reHexColor.MatchString(v):
+			set(k, strings.ToLower(v))
+		}
+	}
+	w.Opts = out
 }
 
 func normalizeWidget(w *Widget) error {
@@ -83,8 +132,16 @@ func normalizeWidget(w *Widget) error {
 	if len([]rune(w.Title)) > 40 {
 		w.Title = string([]rune(w.Title)[:40])
 	}
-	w.W = min(max(w.W, 1), 4)
-	w.H = min(max(w.H, 1), 3)
+	if w.G == 24 {
+		w.W = min(max(w.W, 2), 24)
+		w.H = min(max(w.H, 2), 40)
+		w.X = min(max(w.X, 0), 24-w.W)
+		w.Y = min(max(w.Y, 0), 2000)
+	} else { // an older 4-column layout (placed in order); the UI converts it
+		w.G, w.X, w.Y = 0, 0, 0
+		w.W = min(max(w.W, 1), 4)
+		w.H = min(max(w.H, 1), 3)
+	}
 	if _, ok := ranges[w.Range]; !ok {
 		w.Range = "1h"
 	}
@@ -105,6 +162,10 @@ func normalizeWidget(w *Widget) error {
 			w.Dim = "host"
 		}
 	}
+	if !widgetViews[w.Type][w.View] {
+		w.View = ""
+	}
+	normalizeOpts(w)
 	if w.Limit <= 0 || w.Limit > 50 {
 		w.Limit = 8
 	}
@@ -359,7 +420,15 @@ type topRow struct {
 
 func (a *App) topData(wd Widget) map[string]any {
 	since := time.Now().Add(-wd.dur()).UnixMilli()
-	rs := a.mon.recent(since)
+	out := topFrom(wd, a.mon.recent(since))
+	if a.mon.ringSpan() < wd.dur() {
+		out["partial"] = true
+	}
+	return out
+}
+
+// topFrom: a ranking over the given requests.
+func topFrom(wd Widget, rs []ReqRec) map[string]any {
 	if wd.Dim == "slow" {
 		var list []ReqRec
 		for _, r := range rs {
@@ -428,11 +497,7 @@ func (a *App) topData(wd Widget) map[string]any {
 	if len(rows) > wd.Limit {
 		rows = rows[:wd.Limit]
 	}
-	out := map[string]any{"rows": rows}
-	if a.mon.ringSpan() < wd.dur() {
-		out["partial"] = true
-	}
-	return out
+	return map[string]any{"rows": rows}
 }
 
 // ---------------------------------------------------------------- map: where requests come from
@@ -474,12 +539,21 @@ func blockedStatus(s int) bool { return s == 403 || s == 429 }
 // the widget can say why the map is empty (Docker rewrites the address) instead of looking broken.
 func (a *App) mapData(wd Widget) map[string]any {
 	since := time.Now().Add(-wd.dur()).UnixMilli()
+	out := mapFrom(wd, a.mon.recent(since))
+	if a.mon.ringSpan() < wd.dur() {
+		out["partial"] = true
+	}
+	return out
+}
+
+// mapFrom: countries (with refusals) and client sources over the given requests.
+func mapFrom(wd Widget, recs []ReqRec) map[string]any {
 	m := map[string]*geoRow{}
 	hosts := map[string]map[string]int{}
 	ips := map[string]map[string]bool{}
 	via := map[string]int{}
 	total := 0
-	for _, r := range a.mon.recent(since) {
+	for _, r := range recs {
 		if wd.Host != "" && r.Host != wd.Host {
 			continue
 		}
@@ -507,11 +581,7 @@ func (a *App) mapData(wd Widget) map[string]any {
 		x.Hosts, x.IPs = topHosts(hosts[cc]), len(ips[cc])
 		rows = append(rows, *x)
 	}
-	out := mapOut(rows, via, total)
-	if a.mon.ringSpan() < wd.dur() {
-		out["partial"] = true
-	}
-	return out
+	return mapOut(rows, via, total)
 }
 
 func mapOut(rows []geoRow, via map[string]int, total int) map[string]any {
@@ -671,11 +741,12 @@ func (a *App) eventsData(wd Widget) map[string]any {
 
 func (a *App) postDashData(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Widgets []Widget `json:"widgets"`
-		At      int64    `json:"at"`    // unix ms; 0 = live (older clients: the widgets' own ranges ending here)
-		Range   string   `json:"range"` // live: one of dashSpans for every widget; "" = each widget's own
-		From    int64    `json:"from"`  // past: unix ms window From~To (at most dashMaxWindow)
-		To      int64    `json:"to"`
+		Widgets []Widget    `json:"widgets"`
+		At      int64       `json:"at"`    // unix ms; 0 = live (older clients: the widgets' own ranges ending here)
+		Range   string      `json:"range"` // live: one of dashSpans for every widget; "" = each widget's own
+		From    int64       `json:"from"`  // past: unix ms window From~To (at most dashMaxWindow)
+		To      int64       `json:"to"`
+		Filters *dashFilter `json:"filters"` // dashboard variables
 	}
 	if err := readJSON(r, &in); err != nil {
 		fail(w, 400, err)
@@ -694,7 +765,7 @@ func (a *App) postDashData(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if time.Duration(in.To-in.From)*time.Millisecond > dashMaxWindow {
-			fail(w, 400, errors.New("과거 보기: 기간은 최대 1일입니다"))
+			fail(w, 400, errors.New("과거 보기: 기간은 최대 31일입니다"))
 			return
 		}
 		if in.To > end.UnixMilli() {
@@ -716,11 +787,28 @@ func (a *App) postDashData(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
+	flt := in.Filters.prepare()
+	oneHost, justHost := flt.onlyOneHost()
 	for _, wd := range in.Widgets {
 		if normalizeWidget(&wd) != nil {
 			continue
 		}
 		wd.span = span
+		if flt != nil && reqBased(wd) {
+			if justHost { // one site and nothing else: the cheap per-site buckets
+				if wd.Host == "" {
+					wd.Host = oneHost
+				} else if wd.Host != oneHost {
+					wd.flt = flt // the panel's own site is outside the filter: empty, honestly
+				}
+			} else {
+				wd.flt = flt
+			}
+			if wd.flt != nil {
+				data[wd.ID] = a.filteredData(ctx, wd, end, in.At == 0 && wd.dur() <= 24*time.Hour)
+				continue
+			}
+		}
 		if in.At > 0 || wd.dur() > 24*time.Hour {
 			switch wd.Type {
 			case "stat":
@@ -797,6 +885,16 @@ func (a *App) getDashRequests(w http.ResponseWriter, r *http.Request) {
 	lo, hi := f("min", 0), f("max", math.MaxFloat64)
 	host := strings.ToLower(q.Get("host"))
 	classes := statusClasses(q.Get("st"))
+	split := func(k string) []string {
+		var out []string
+		for _, x := range strings.Split(q.Get(k), ",") {
+			if x = strings.TrimSpace(x); x != "" {
+				out = append(out, x)
+			}
+		}
+		return out
+	}
+	vf := (&dashFilter{Hosts: split("hosts"), Countries: split("cc"), Vias: split("via")}).prepare()
 	keep := func(status int) bool {
 		if len(classes) == 0 {
 			return true
@@ -811,7 +909,7 @@ func (a *App) getDashRequests(w http.ResponseWriter, r *http.Request) {
 	if a.mon.ringSpan() < time.Since(time.UnixMilli(from)) || q.Get("db") == "1" {
 		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 		defer cancel()
-		rows, err := a.ldb.QueryRequests(ctx, ReqQuery{From: from, To: to, Host: host, Classes: classes, MinMs: lo, MaxMs: func() float64 {
+		rows, err := a.ldb.QueryRequests(ctx, ReqQuery{From: from, To: to, Host: host, Classes: classes, Filter: vf, MinMs: lo, MaxMs: func() float64 {
 			if hi > 1e11 {
 				return 0
 			}
@@ -830,7 +928,7 @@ func (a *App) getDashRequests(w http.ResponseWriter, r *http.Request) {
 	}
 	var out []ReqRec
 	for _, x := range a.mon.recent(from) {
-		if x.T <= to && x.Ms >= lo && x.Ms <= hi && (host == "" || x.Host == host) && keep(x.Status) {
+		if x.T <= to && x.Ms >= lo && x.Ms <= hi && (host == "" || x.Host == host) && keep(x.Status) && vf.match(x) {
 			out = append(out, x)
 		}
 	}

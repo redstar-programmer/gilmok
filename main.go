@@ -27,7 +27,7 @@ import (
 //go:embed web
 var webFS embed.FS
 
-var version = "0.1.20"
+var version = "0.1.21"
 
 func main() {
 	dataDir := env("GM_DATA", "/data")
@@ -181,6 +181,7 @@ func (app *App) handler() http.Handler {
 	api.HandleFunc("GET /api/dashboard", app.getDashboard)
 	api.HandleFunc("PUT /api/dashboard", app.putDashboard)
 	api.HandleFunc("POST /api/dash/data", app.postDashData)
+	api.HandleFunc("GET /api/dash/vars", app.getDashVars)
 	api.HandleFunc("GET /api/dash/requests", app.getDashRequests)
 	api.HandleFunc("GET /api/health", app.getHealth)
 	api.HandleFunc("POST /api/ddns/run", app.postDDNSRun)
