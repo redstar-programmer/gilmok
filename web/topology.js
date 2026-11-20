@@ -389,6 +389,7 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
   const hopsDraw = M.hops.length ? M.hops : [null];
   const hopsShown = pin443 != null || !!ts; // the device row is drawn (it carries public / private traffic)
   let csTop = Infinity; // top of the CrowdSec box (inside the host region) when shown
+  let cfBox = null; // the Cloudflare box of the public path { cy, h } — Gilmok's API calls go there too
   const tsHopIdx = ts ? hopsDraw.map((x, i) => (x === null || x.tailnet ? i : -1)).filter((i) => i >= 0) : [];
   const viaHops = tsHopIdx.length > 0;
   const rY = pin443 != null && viaHops ? (Y(pin443) + Y(pin8443)) / 2 : pin443 != null ? Y(pin443) : ts ? Y(pin8443) : 0;
@@ -448,9 +449,11 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
     if (orangeItems.length) {
       const cy = Y(cfY);
       const asn = set.cfAsnRule ? (set.cfAsnAction === 'block' ? 'ISP 차단' : 'ISP 챌린지') : null;
-      node(X.edge, cy, NW, NH + (asn || set.crowdsecSync ? 20 : 0), {
+      const ch = NH + (asn || set.crowdsecSync ? 20 : 0);
+      cfBox = { cy, h: ch };
+      node(X.edge, cy, NW, ch, {
         title: 'Cloudflare', sub: hasTunnel ? 'WAF · 터널' : 'WAF · 프록시', iconName: 'cloud', color: TC.orange, list: orangeItems,
-        title2: `Proxied: Cloudflare 엣지를 거쳐 들어옵니다 (${set.domain || ''})`,
+        title2: `Proxied: Cloudflare 엣지를 거쳐 들어옵니다 (${set.domain || ''})\n길목은 API로 이 존의 DNS 레코드·WAF 규칙${set.crowdsecSync ? '·CrowdSec 차단 목록' : ''}을 바꿉니다 (아래 보라 점선)`,
         extra: (g) => {
           let xx = 12;
           const yy = NH + 20 - 24;
@@ -542,7 +545,8 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
     let d = `M${sx} ${sy} L${inX + 16} ${sy} Q${inX} ${sy} ${inX} ${sy - s * 16} L${inX} ${hy}`;
     for (let i = 1; i < lefts.length; i++) d += ` M${lefts[i - 1] + 16} ${hy} Q${(lefts[i - 1] + lefts[i] + HW) / 2} ${hy + s * 34} ${lefts[i] + HW - 16} ${hy}`;
     const outX = lefts[lefts.length - 1] + 16;
-    d += ` M${outX} ${hy} C${outX} ${hy + s * 40} ${tx} ${ty - 60} ${tx} ${ty}`; // into the destination's top
+    const into = ty < hy ? (side === 'top' ? -60 : 60) : -60; // above the row: into its top / bottom; below: into its top
+    d += ` M${outX} ${hy} C${outX} ${hy + s * 40} ${tx} ${ty + into} ${tx} ${ty}`;
     edge(0, 0, 0, 0, color, list, { d, dashed: true, static: true });
     label(lx, ly, text, color, list);
   }
@@ -657,8 +661,13 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
         title2: `Authelia (${set.autheliaContainer || ''}) — 길목이 access_control과 users_database.yml을 씁니다` });
       manage(`M${gilX + GLW} ${gilY} L${ax - 2} ${gilY}`, '정책·사용자', (gilX + GLW + ax) / 2, gilY - 16);
     }
-    // manages Cloudflare over its API (down-left)
-    if (use('cloudflare')) {
+    // manages Cloudflare over its API: into the Cloudflare box of the public path (one Cloudflare),
+    // through the front devices; a box of its own when no site goes through Cloudflare
+    if (use('cloudflare') && cfBox && hopsShown) {
+      const apiText = use('crowdsec') && set.crowdsecSync ? 'DNS·WAF·차단 목록 (API)' : 'DNS·WAF 규칙 (API)';
+      const cfBottom = cfBox.cy + cfBox.h / 2 + 2;
+      egress(gilX, gilY - GLH / 2 + 12, 'bottom', X.edge + NW / 2, cfBottom, VIOLET, [], apiText, hx(0) + HW / 2 + 40, rY + NH / 2 + 30);
+    } else if (use('cloudflare')) {
       const cy = gilY + ROWB;
       node(X.edge, cy, NW, NH, { title: 'Cloudflare API', sub: 'DNS · WAF 규칙', iconName: 'cloud', color: TC.orange,
         title2: `길목이 API 토큰으로 ${set.domain || '도메인'} 존의 DNS 레코드와 WAF 규칙을 바꿉니다${use('crowdsec') && set.crowdsecSync ? ' (CrowdSec 차단 목록 포함)' : ''}` });
@@ -778,7 +787,7 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
     return h('div', { class: 'seg-mini', role: 'group', 'aria-label': '확대·축소' }, minus, fit, plus);
   })();
   // flow animation: auto (follows the OS "reduce motion" setting) / on / off — per browser
-  const motionOf = () => { try { return localStorage.getItem('gm.topoMotion') || 'auto'; } catch { return 'auto'; } };
+  const motionOf = () => { try { return localStorage.getItem('gm.topoMotion') || 'on'; } catch { return 'on'; } };
   const motionCtl = (() => {
     const cur = motionOf();
     const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -831,6 +840,7 @@ function topologyViewOf(onOpen, info, onEdit, mode, setMode) {
   const mo = motionOf();
   const out = h('div', { class: `glass topo ${blindOn() ? 'blind' : ''} ${mo === 'on' ? 'motion-on' : mo === 'off' ? 'motion-off' : ''}` }, sum, notes.length ? h('div', { class: 'stack topo-notes' }, notes) : null, h('div', { class: 'topo-scroll' }, svg), legend);
   if (blindOn()) blindTopo(out, set, all);
+  dragPan(out.querySelector('.topo-scroll'));
   return out;
 }
 
@@ -1074,4 +1084,42 @@ function openEdgeWizard(info, focus, onSaved) {
   });
   save.addEventListener('click', () => run(save, read, has ? '구성도 정보를 저장했습니다' : '구성도에 추가했습니다'));
   if (del) del.addEventListener('click', () => run(del, clearPatch, '구성도에서 삭제했습니다'));
+}
+
+/** drag the map to move around it: sideways inside its scroll box, up and down on the page. A press
+ *  that moves less than 4px stays a click (opening a box); after a real drag the click is swallowed. */
+function dragPan(box) {
+  if (!box) return;
+  let d = null;
+  box.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.pointerType === 'touch') return; // touch scrolls natively
+    d = { x: e.clientX, y: e.clientY, lastY: e.clientY, sl: box.scrollLeft, id: e.pointerId, moved: false };
+  });
+  box.addEventListener('pointermove', (e) => {
+    if (!d || e.pointerId !== d.id) return;
+    const dx = e.clientX - d.x;
+    if (!d.moved) {
+      if (Math.hypot(dx, e.clientY - d.y) < 4) return;
+      d.moved = true;
+      box.classList.add('dragging');
+      try { box.setPointerCapture(d.id); } catch { /* released already */ }
+    }
+    box.scrollLeft = d.sl - dx;
+    window.scrollBy(0, d.lastY - e.clientY);
+    d.lastY = e.clientY;
+    e.preventDefault();
+  });
+  const end = () => {
+    if (!d) return;
+    if (d.moved) {
+      // the click that follows a drag must not open the box under the pointer
+      const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+      box.addEventListener('click', swallow, { capture: true, once: true });
+      setTimeout(() => box.removeEventListener('click', swallow, { capture: true }), 0);
+    }
+    box.classList.remove('dragging');
+    d = null;
+  };
+  box.addEventListener('pointerup', end);
+  box.addEventListener('pointercancel', end);
 }
