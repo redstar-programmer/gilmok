@@ -171,7 +171,17 @@ func (l *LogDB) Req(r ReqRec) {
 	}
 	select {
 	case l.reqs <- r:
+		return
 	default:
+	}
+	// the queue is full — a burst (a log stream reconnecting, the first read of a log file). The
+	// caller is the log reader's own goroutine: wait for the writer a little instead of losing the
+	// request; drop only when the writer is stuck.
+	t := time.NewTimer(2 * time.Second)
+	defer t.Stop()
+	select {
+	case l.reqs <- r:
+	case <-t.C:
 		l.dropped.Add(1)
 	}
 }

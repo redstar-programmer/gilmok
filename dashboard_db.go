@@ -203,69 +203,75 @@ func (l *LogDB) TopRequests(ctx context.Context, dim string, from, to int64, hos
 	return out, rows.Err()
 }
 
-// GeoSummary: requests per country (with refusals) and per client source in [from, to].
+// GeoSummary: requests per country (with refusals) and per client source in [from, to] — one pass
+// over the window, aggregated here (three GROUP BY scans and COUNT(DISTINCT ip) per country were
+// several times slower on a week of requests).
 func (l *LogDB) GeoSummary(ctx context.Context, from, to int64, host string) ([]geoRow, map[string]int, int, error) {
 	conds, args := []string{"ts>=?", "ts<=?"}, []any{from, to}
 	if host != "" {
 		conds, args = append(conds, "host=?"), append(args, host)
 	}
-	where := strings.Join(conds, " AND ")
-	rows, err := l.r.QueryContext(ctx, `SELECT cc, COUNT(*), SUM(status IN (403,429)), SUM(status<300), SUM(status>=300 AND status<400), SUM(status>=400 AND status<500), SUM(status>=500), COUNT(DISTINCT ip) FROM requests WHERE `+where+` AND IFNULL(cc,'')<>'' GROUP BY cc ORDER BY 2 DESC LIMIT 200`, args...)
+	rows, err := l.r.QueryContext(ctx, `SELECT IFNULL(cc,''), host, IFNULL(via,''), status, IFNULL(ip,'') FROM requests WHERE `+strings.Join(conds, " AND "), args...)
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	var out []geoRow
-	idx := map[string]int{}
-	for rows.Next() {
-		var g geoRow
-		if err := rows.Scan(&g.CC, &g.N, &g.Blocked, &g.St[0], &g.St[1], &g.St[2], &g.St[3], &g.IPs); err != nil {
-			rows.Close()
-			return nil, nil, 0, err
-		}
-		idx[g.CC] = len(out)
-		out = append(out, g)
+	defer rows.Close()
+	type acc struct {
+		g     geoRow
+		ips   map[string]struct{}
+		hosts map[string]int
 	}
-	rows.Close()
-	// the sites each country asked for (top 3 per country)
-	hr, err := l.r.QueryContext(ctx, `SELECT cc, host, COUNT(*) FROM requests WHERE `+where+` AND IFNULL(cc,'')<>'' GROUP BY cc, host`, args...)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	per := map[string]map[string]int{}
-	for hr.Next() {
-		var cc, host string
-		var n int
-		if err := hr.Scan(&cc, &host, &n); err != nil {
-			hr.Close()
-			return nil, nil, 0, err
-		}
-		if per[cc] == nil {
-			per[cc] = map[string]int{}
-		}
-		per[cc][host] = n
-	}
-	hr.Close()
-	for cc, m := range per {
-		if i, ok := idx[cc]; ok {
-			out[i].Hosts = topHosts(m)
-		}
-	}
+	per := map[string]*acc{}
 	via, total := map[string]int{}, 0
-	vr, err := l.r.QueryContext(ctx, `SELECT IFNULL(via,''), COUNT(*) FROM requests WHERE `+where+` GROUP BY 1`, args...)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	defer vr.Close()
-	for vr.Next() {
-		var k string
-		var n int
-		if err := vr.Scan(&k, &n); err != nil {
+	for rows.Next() {
+		var cc, h, v, ip string
+		var st int
+		if err := rows.Scan(&cc, &h, &v, &st, &ip); err != nil {
 			return nil, nil, 0, err
 		}
-		via[k] += n
-		total += n
+		via[v]++
+		total++
+		if cc == "" {
+			continue
+		}
+		x := per[cc]
+		if x == nil {
+			x = &acc{g: geoRow{CC: cc}, ips: map[string]struct{}{}, hosts: map[string]int{}}
+			per[cc] = x
+		}
+		x.g.N++
+		if st == 403 || st == 429 {
+			x.g.Blocked++
+		}
+		switch {
+		case st < 300:
+			x.g.St[0]++
+		case st < 400:
+			x.g.St[1]++
+		case st < 500:
+			x.g.St[2]++
+		default:
+			x.g.St[3]++
+		}
+		if ip != "" {
+			x.ips[ip] = struct{}{}
+		}
+		x.hosts[h]++
 	}
-	return out, via, total, vr.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, 0, err
+	}
+	out := make([]geoRow, 0, len(per))
+	for _, x := range per {
+		x.g.IPs = len(x.ips)
+		x.g.Hosts = topHosts(x.hosts)
+		out = append(out, x.g)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].N > out[j].N || out[i].N == out[j].N && out[i].CC < out[j].CC })
+	if len(out) > 200 {
+		out = out[:200]
+	}
+	return out, via, total, nil
 }
 
 func (a *App) dbMap(ctx context.Context, wd Widget, end time.Time) map[string]any {

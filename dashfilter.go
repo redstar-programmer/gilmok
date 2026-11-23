@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"net/http"
 	"sort"
@@ -209,7 +210,28 @@ func (l *LogDB) SampleRequests(ctx context.Context, from, to int64, f *dashFilte
 
 // filteredRecs: the requests a filtered panel is computed from — memory when it holds the whole
 // range (live), the log database otherwise.
-func (a *App) filteredRecs(ctx context.Context, wd Widget, end time.Time, live bool) ([]ReqRec, bool) {
+// recMemo: the requests one /api/dash/data call already read, by window · site · source — the
+// filtered panels of a dashboard all ask for the same rows (each read was up to 300k rows).
+type recMemo map[string]memoRecs
+
+type memoRecs struct {
+	recs    []ReqRec
+	partial bool
+}
+
+func (a *App) filteredRecs(ctx context.Context, wd Widget, end time.Time, live bool, memo recMemo) ([]ReqRec, bool) {
+	key := fmt.Sprintf("%d|%d|%s|%v", end.UnixMilli(), wd.dur(), wd.Host, live)
+	if m, ok := memo[key]; ok {
+		return m.recs, m.partial
+	}
+	recs, partial := a.readFilteredRecs(ctx, wd, end, live)
+	if memo != nil {
+		memo[key] = memoRecs{recs, partial}
+	}
+	return recs, partial
+}
+
+func (a *App) readFilteredRecs(ctx context.Context, wd Widget, end time.Time, live bool) ([]ReqRec, bool) {
 	from := end.Add(-wd.dur()).UnixMilli()
 	if live && a.mon.ringSpan() >= wd.dur() {
 		var out []ReqRec
@@ -253,8 +275,8 @@ func bucketsOf(recs []ReqRec, rng time.Duration, end time.Time, points int) (int
 }
 
 // filteredData: a request-based panel computed from the filtered requests.
-func (a *App) filteredData(ctx context.Context, wd Widget, end time.Time, live bool) map[string]any {
-	recs, partial := a.filteredRecs(ctx, wd, end, live)
+func (a *App) filteredData(ctx context.Context, wd Widget, end time.Time, live bool, memo recMemo) map[string]any {
+	recs, partial := a.filteredRecs(ctx, wd, end, live, memo)
 	var out map[string]any
 	switch wd.Type {
 	case "stat":

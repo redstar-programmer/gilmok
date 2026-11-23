@@ -27,7 +27,7 @@ import (
 //go:embed web
 var webFS embed.FS
 
-var version = "0.1.21"
+var version = "0.1.22"
 
 func main() {
 	dataDir := env("GM_DATA", "/data")
@@ -89,12 +89,22 @@ func (app *App) handler() http.Handler {
 	auth := newAuth(app)
 	app.auth = auth
 
-	// auth (no session yet)
+	// auth (no session yet) — writes still need the UI's X-GM header (a plain cross-site form cannot
+	// add it), as the session routes do
+	gm := func(h http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("X-GM") != "1" {
+				fail(w, 403, errors.New("잘못된 요청"))
+				return
+			}
+			h(w, r)
+		}
+	}
 	mux.HandleFunc("GET /api/auth/state", auth.state)
-	mux.HandleFunc("POST /api/auth/setup", auth.setup)
-	mux.HandleFunc("POST /api/auth/login", auth.login)
-	mux.HandleFunc("POST /api/auth/logout", auth.logout)
-	mux.HandleFunc("POST /api/auth/lang", auth.chooseLang) // first visit only (language not chosen yet)
+	mux.HandleFunc("POST /api/auth/setup", gm(auth.setup))
+	mux.HandleFunc("POST /api/auth/login", gm(auth.login))
+	mux.HandleFunc("POST /api/auth/logout", gm(auth.logout))
+	mux.HandleFunc("POST /api/auth/lang", gm(auth.chooseLang)) // first visit only (language not chosen yet)
 
 	S := auth.sensitive // step-up: fresh password (+TOTP) required
 	api := http.NewServeMux()

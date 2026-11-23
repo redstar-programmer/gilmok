@@ -752,6 +752,16 @@ func (a *App) postDashData(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, err)
 		return
 	}
+	// one request cannot ask for unbounded work: as many panels as a layout may hold, and filter
+	// lists of a sane size (each value is a SQL parameter)
+	if len(in.Widgets) > 40 {
+		fail(w, 400, errors.New("패널은 한 번에 40개까지입니다"))
+		return
+	}
+	if f := in.Filters; f != nil && (len(f.Hosts) > 200 || len(f.Countries) > 300 || len(f.Vias) > 10 || len(f.Classes) > 10) {
+		fail(w, 400, errors.New("필터 값이 너무 많습니다 (사이트 200 · 국가 300개까지)"))
+		return
+	}
 	a.touchDashboard()
 	data := map[string]any{}
 	end := time.Now()
@@ -788,6 +798,7 @@ func (a *App) postDashData(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	flt := in.Filters.prepare()
+	memo := recMemo{}
 	oneHost, justHost := flt.onlyOneHost()
 	for _, wd := range in.Widgets {
 		if normalizeWidget(&wd) != nil {
@@ -805,7 +816,7 @@ func (a *App) postDashData(w http.ResponseWriter, r *http.Request) {
 				wd.flt = flt
 			}
 			if wd.flt != nil {
-				data[wd.ID] = a.filteredData(ctx, wd, end, in.At == 0 && wd.dur() <= 24*time.Hour)
+				data[wd.ID] = a.filteredData(ctx, wd, end, in.At == 0 && wd.dur() <= 24*time.Hour, memo)
 				continue
 			}
 		}
@@ -894,7 +905,12 @@ func (a *App) getDashRequests(w http.ResponseWriter, r *http.Request) {
 		}
 		return out
 	}
-	vf := (&dashFilter{Hosts: split("hosts"), Countries: split("cc"), Vias: split("via")}).prepare()
+	hs, ccs, vias := split("hosts"), split("cc"), split("via")
+	if len(hs) > 200 || len(ccs) > 300 || len(vias) > 10 {
+		fail(w, 400, errors.New("필터 값이 너무 많습니다 (사이트 200 · 국가 300개까지)"))
+		return
+	}
+	vf := (&dashFilter{Hosts: hs, Countries: ccs, Vias: vias}).prepare()
 	keep := func(status int) bool {
 		if len(classes) == 0 {
 			return true
