@@ -448,7 +448,7 @@ const S = {
   checks: {},    // /api/check/{target} cache
   validated: {}, // last /api/validate result per target (this session)
   filter: { q: '', exposure: 'all' },
-  view: localStorage.getItem('gm.view') === 'list' ? 'list' : 'map', // services tab: map (default) | list
+  view: ['list', 'net'].includes(localStorage.getItem('gm.view')) ? localStorage.getItem('gm.view') : 'map', // services tab: map (default) | list | net (network map)
 };
 
 const TABS = ['dashboard', 'services', 'caddy', 'authelia', 'cloudflare', 'crowdsec', 'logs', 'gilmok'];
@@ -1064,7 +1064,7 @@ function renderServices(panel) {
   const tableBox = h('div', { class: 'glass table-wrap' });
   const mapBox = h('div');
   const viewSeg = h('div', { class: 'segmented view-toggle', role: 'radiogroup', 'aria-label': '보기 방식' },
-    [['list', '목록'], ['map', '구성도']].map(([v, l]) => h('label', null,
+    [['list', '목록'], ['map', '구성도'], ['net', '네트워크']].map(([v, l]) => h('label', null,
       h('input', { type: 'radio', name: 'svc-view', value: v, checked: S.view === v }), h('span', null, l))));
 
   const privLeft = st.services.filter((x) => x.exposure !== 'public').length;
@@ -1089,12 +1089,13 @@ function renderServices(panel) {
 
   const draw = () => {
     paintSum();
-    const map = S.view === 'map';
+    const map = S.view === 'map' || S.view === 'net';
     tableBox.hidden = map;
     mapBox.hidden = !map;
     search.parentElement.hidden = map;
     exp.hidden = map;
-    if (map) { S.topoInfo = null; mapBox.replaceChildren(topologyPanel((s) => openServiceDrawer(s))); }
+    if (S.view === 'net') mapBox.replaceChildren(netMapPanel((s) => openServiceDrawer(s)));
+    else if (map) { S.topoInfo = null; mapBox.replaceChildren(topologyPanel((s) => openServiceDrawer(s))); }
     else tableBox.replaceChildren(serviceTable());
   };
   const healthSig = () => JSON.stringify(S.state.services.map((s) => [s.id, (healthOf(s) || {}).st]));
@@ -1103,6 +1104,7 @@ function renderServices(panel) {
     const before = healthSig();
     await loadHealth();
     if (!hsum.isConnected) return;
+    document.dispatchEvent(new Event('gm:health')); // the network map redraws its status dots
     paintSum();
     // redraw only when a service's state changed — keeps the map's scroll position and hovered path
     if (healthSig() !== before) {
@@ -1118,7 +1120,7 @@ function renderServices(panel) {
           const leaf = hov && hov.key ? mapBox.querySelector(`.leaf[data-key="${CSS.escape(hov.key)}"]`) : null;
           if (leaf) leaf.dispatchEvent(new Event('mouseenter'));
         }
-      } else if (!tableBox.querySelector(':focus')) draw();
+      } else if (S.view === 'list' && !tableBox.querySelector(':focus')) draw(); // the network map refreshes its own status
     }
     setTimeout(healthTick, 30000);
   };

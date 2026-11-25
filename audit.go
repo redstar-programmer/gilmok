@@ -62,6 +62,7 @@ var auditRoutes = []auditRoute{
 	{regexp.MustCompile(`^/api/users/[^/]+$`), "DELETE", "Authelia 사용자 삭제", "warn"},
 	{regexp.MustCompile(`^/api/system/update$`), "POST", "이미지 업데이트", "warn"},
 	{regexp.MustCompile(`^/api/dashboard$`), "PUT", "대시보드 배치 변경", "info"},
+	{regexp.MustCompile(`^/api/netmap$`), "PUT", "네트워크 맵 변경", "info"},
 	{regexp.MustCompile(`^/api/dns/records$`), "POST", "DNS 레코드 직접 추가", "warn"},
 	{regexp.MustCompile(`^/api/dns/records/[^/]+$`), "PUT", "DNS 레코드 직접 수정", "warn"},
 	{regexp.MustCompile(`^/api/dns/records/[^/]+$`), "DELETE", "DNS 레코드 직접 삭제", "critical"},

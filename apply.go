@@ -22,6 +22,7 @@ type App struct {
 	applyMu sync.Mutex // one apply/update at a time
 	usersMu sync.Mutex // Authelia users: read-modify-write of users_database.yml
 	cfwafMu sync.Mutex // Cloudflare WAF rules apply
+	mapc    mapChecker // network map: device status checks
 	csMu    sync.Mutex // CrowdSec → Cloudflare list sync
 	faultMu sync.Mutex
 	fault   string // one-shot fault injection (GM_DEV_FAULTS=1 only)

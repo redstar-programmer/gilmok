@@ -365,7 +365,7 @@ func TestSecDashBounds(t *testing.T) {
 	// windows
 	for _, c := range []struct {
 		from, to int64
-		want    int
+		want     int
 	}{{now - 32*24*3600_000, now, 400}, {now, now - 1000, 400}, {now + 3600_000, now + 7200_000, 400}, {-5, now, 400}} {
 		code, _ := viewer.do("POST", "/api/dash/data", fmt.Sprintf(`{"widgets":[],"from":%d,"to":%d}`, c.from, c.to))
 		if code != c.want {

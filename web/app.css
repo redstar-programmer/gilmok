@@ -1458,3 +1458,33 @@ html:not([lang="ko"]) .brand-en { display: none; }
 .gauge b { font-variant-numeric: tabular-nums; }
 .cbars { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
 .cbar { display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 8px; }
+
+/* ---- network map (서비스 탭 › 네트워크) */
+.nmap-wrap { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.nm-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.nm-toolbar .grow { flex: 1; }
+.nm-stage { position: relative; height: clamp(420px, 68vh, 900px); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--chart-bg); }
+.nmap-svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; user-select: none; }
+.nmap-svg.panning { cursor: grabbing; }
+.nmap-svg.dragging { cursor: grabbing; }
+.nm-node { cursor: pointer; }
+.nm-node:focus { outline: none; }
+.nm-node:focus-visible .nm-bg, .nm-node:hover .nm-bg { stroke-opacity: 1; }
+.nm-node.down .nm-bg { stroke-width: 2; }
+.nm-link { cursor: pointer; }
+.nm-link:hover path:last-child { stroke-opacity: 1; }
+.nm-zone .nm-zone-head, .nm-zone text { cursor: move; }
+.nm-mini { position: absolute; right: 10px; bottom: 10px; width: 180px; height: 120px; cursor: pointer; border-radius: 8px; box-shadow: var(--shadow); }
+.nm-hint { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); background: var(--surf); border: 1px solid var(--accent); border-radius: 999px; padding: 5px 14px; font-size: 13px; box-shadow: var(--shadow); }
+.nm-side { position: absolute; top: 10px; right: 10px; bottom: 140px; width: min(320px, calc(100% - 20px)); overflow-y: auto; background: var(--surf); border: 1px solid var(--line-2); border-radius: 12px; box-shadow: var(--shadow); padding: 12px 14px; }
+.nm-side .stack { gap: 10px; }
+.nm-side-x { position: absolute; top: 6px; right: 6px; }
+.nm-side-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px; padding-right: 26px; }
+.nm-side-head b { font-size: 15px; }
+.nm-links { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.nm-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 12px; color: var(--fg-2); }
+.nm-legend .leg { display: inline-flex; align-items: center; gap: 6px; }
+.nm-legend .hint { margin-left: auto; }
+@media (max-width: 700px) { .nm-side { bottom: auto; max-height: 55%; } .nm-mini { display: none; } }
+.nm-legend .l-ok, .nm-legend .l-down { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--ok); }
+.nm-legend .l-down { background: var(--danger); }

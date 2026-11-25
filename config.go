@@ -32,6 +32,7 @@ type ConfigFile struct {
 	Groups      []AGroup   `json:"autheliaGroups"`
 	Roles       []*Role    `json:"roles"`
 	Dashboard   []Widget   `json:"dashboard,omitempty"`
+	NetMap      *NetMap    `json:"netMap,omitempty"`
 	CFWAF       CFWAFState `json:"cfWaf"`
 	ManagedDNS  []string   `json:"managedDns,omitempty"`
 	ManagedDNS6 []string   `json:"managedDns6,omitempty"`
@@ -41,7 +42,7 @@ func configFrom(d Data) ConfigFile {
 	return ConfigFile{
 		Format: configFormat, AppVersion: version, Exported: time.Now(),
 		Settings: d.Settings, Services: d.Services, Groups: d.AGroups, Roles: d.Roles,
-		Dashboard: d.Dashboard, CFWAF: d.CFWAF, ManagedDNS: d.ManagedDNS, ManagedDNS6: d.ManagedDNS6,
+		Dashboard: d.Dashboard, NetMap: d.NetMap, CFWAF: d.CFWAF, ManagedDNS: d.ManagedDNS, ManagedDNS6: d.ManagedDNS6,
 	}
 }
 
@@ -97,6 +98,9 @@ type ImportPlan struct {
 
 // validateConfig checks an imported file is safe to apply (same gates as saving each piece by hand).
 func (a *App) validateConfig(cfg *ConfigFile, cur Settings) error {
+	if err := normalizeNetMap(cfg.NetMap); err != nil {
+		return fmt.Errorf("네트워크 맵: %w", err)
+	}
 	if cfg.Format != configFormat {
 		return errors.New("길목 설정 파일이 아닙니다 (format 불일치) — 「설정 내보내기」로 받은 파일을 올리세요")
 	}
@@ -239,6 +243,7 @@ func (a *App) postConfigImport(w http.ResponseWriter, r *http.Request) {
 		d.AGroups, d.AGroupsInit = cfg.Groups, true
 		d.Roles = roles
 		d.Dashboard = cfg.Dashboard
+		d.NetMap = cfg.NetMap
 		d.CFWAF = cfg.CFWAF
 		d.ManagedDNS, d.ManagedDNS6 = cfg.ManagedDNS, cfg.ManagedDNS6
 		d.markDirty("설정 복원 (파일에서 가져옴)")

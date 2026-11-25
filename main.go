@@ -27,7 +27,7 @@ import (
 //go:embed web
 var webFS embed.FS
 
-var version = "0.1.22"
+var version = "0.1.23"
 
 func main() {
 	dataDir := env("GM_DATA", "/data")
@@ -74,6 +74,7 @@ func main() {
 	}()
 	go app.ddnsLoop()
 	go app.crowdsecLoop()
+	go app.netmapLoop(context.Background())
 
 	handler := app.handler()
 
@@ -192,6 +193,10 @@ func (app *App) handler() http.Handler {
 	api.HandleFunc("PUT /api/dashboard", app.putDashboard)
 	api.HandleFunc("POST /api/dash/data", app.postDashData)
 	api.HandleFunc("GET /api/dash/vars", app.getDashVars)
+	api.HandleFunc("GET /api/netmap", app.getNetMap)
+	api.HandleFunc("PUT /api/netmap", app.putNetMap)
+	api.HandleFunc("GET /api/netmap/status", app.getNetMapStatus)
+	api.HandleFunc("POST /api/netmap/check", app.postNetMapCheck)
 	api.HandleFunc("GET /api/dash/requests", app.getDashRequests)
 	api.HandleFunc("GET /api/health", app.getHealth)
 	api.HandleFunc("POST /api/ddns/run", app.postDDNSRun)

@@ -271,6 +271,7 @@ type Data struct {
 	CFWAF           CFWAFState               `json:"cfWaf"`
 	MTLS            MTLSState                `json:"mtls"`                  // Cloudflare client certificate Gilmok made (mtls.go)
 	Dashboard       []Widget                 `json:"dashboard"`             // nil = default layout
+	NetMap          *NetMap                  `json:"netMap,omitempty"`      // 서비스 탭 › 네트워크 (display only)
 	ProxySecret     string                   `json:"proxySecret"`           // header Caddy adds for Gilmok's own site (never sent to the UI)
 	TOTPSecret      string                   `json:"totpSecret,omitempty"`  // before accounts (migrated)
 	TOTPPending     string                   `json:"totpPending,omitempty"` //
