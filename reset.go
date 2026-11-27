@@ -212,6 +212,7 @@ func (a *App) postReset(w http.ResponseWriter, r *http.Request) {
 	if in.Accounts {
 		a.auth.mu.Lock()
 		a.auth.sessions = map[string]*Session{}
+		a.auth.saveSessionsLocked()
 		a.auth.mu.Unlock()
 		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 	}

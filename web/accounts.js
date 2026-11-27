@@ -245,6 +245,7 @@ function myAccountStep() {
       h('dt', null, '역할'), h('dd', null, m.roleName || m.role || '—'),
       h('dt', null, '권한'), h('dd', null, permChips)),
     tfa,
+    trustedBox(),
     h('div', { class: 'section-box stack' }, h('h3', null, icon('lock'), '비밀번호'), pwForm));
   return { id: 'me', title: '내 계정', desc: '내 비밀번호와 2단계 인증(선택). 다른 사람 계정은 「계정 관리」에서 다룹니다.',
     state: m.totp ? 'ok' : 'info', stateText: `${m.name || ''}${m.totp ? ' · 2단계 켜짐' : ' · 2단계 꺼짐'}`, body };
@@ -455,6 +456,12 @@ function accountsStep(getL) {
           try { const x = await busy(b, () => api('POST', `/api/accounts/${encodeURIComponent(a.name)}/password`)); showSecretOnce('임시 비밀번호', `${a.name} 계정의 새 임시 비밀번호입니다.`, x.tempPassword, '이 창을 닫으면 다시 볼 수 없습니다.'); load(); } catch (ex) { toast(ex.message, 'err'); }
         }));
       }
+      if (a.trusted > 0) {
+        btns.push(act(`신뢰 기기 해제 (${a.trusted})`, '', async (b) => {
+          if (!(await confirmDialog({ title: `${a.name} 신뢰 기기 해제`, message: `${a.name} 계정이 2단계 인증을 생략하던 기기 ${a.trusted}개를 해제합니다. 다음 로그인부터 코드를 묻습니다.`, okText: '해제' }))) return;
+          try { await busy(b, () => api('DELETE', `/api/accounts/${encodeURIComponent(a.name)}/devices`)); toast('해제했습니다'); load(); } catch (ex) { toast(ex.message, 'err'); }
+        }));
+      }
       if (a.totp) {
         btns.push(act('2단계 초기화…', '', async (b) => {
           if (!(await confirmDialog({ title: `${a.name} 2단계 인증 초기화`, message: '휴대폰을 잃어버린 경우 등에 씁니다. 등록된 인증 앱과 복구 코드를 지우고 이 계정의 로그인을 끊습니다. 다음 로그인 때 새로 설정합니다.', okText: '초기화', danger: true }))) return;
@@ -520,4 +527,33 @@ function accountsStep(getL) {
   }
   load();
   return { id: 'accounts', title: '계정 관리', desc: '길목에 로그인하는 사람과 역할(권한), 계정별 2단계 인증 요구를 관리합니다.', state: 'wait', body };
+}
+
+
+/** 「내 계정」: browsers that skip the second factor (trust.go) — list, revoke one, revoke all */
+function trustedBox() {
+  const box = h('div', { class: 'section-box stack trusted-box' });
+  const draw = async () => {
+    let r;
+    try { r = await api('GET', '/api/auth/devices'); } catch (ex) { box.replaceChildren(errorBox(ex.message)); return; }
+    const head = h('h3', null, icon('lock'), '신뢰하는 기기');
+    if (!r.totp) { box.replaceChildren(head, h('p', { class: 'small muted' }, '2단계 인증을 켜면, 로그인할 때 「이 기기 신뢰」를 골라 그 브라우저에서는 비밀번호만으로 들어올 수 있습니다.')); return; }
+    if (!r.days) { box.replaceChildren(head, h('p', { class: 'small muted' }, '관리자가 신뢰 기기를 꺼 두었습니다 — 로그인할 때마다 2단계 인증 코드를 묻습니다.')); return; }
+    const all = h('button', { type: 'button', class: 'btn sm', disabled: !r.devices.length }, '모두 해제');
+    all.addEventListener('click', () => busy(all, async () => { await api('DELETE', '/api/auth/devices/all'); toast('신뢰 기기를 모두 해제했습니다'); draw(); }));
+    const rows = r.devices.map((d) => {
+      const b = h('button', { type: 'button', class: 'btn ghost sm' }, '해제');
+      b.addEventListener('click', () => busy(b, async () => { await api('DELETE', `/api/auth/devices/${encodeURIComponent(d.id)}`); toast('해제했습니다'); draw(); }));
+      return h('tr', null, h('td', null, d.label, d.current ? h('span', { class: 'badge accent' }, '이 브라우저') : null), h('td', { class: 'mono small' }, d.ip),
+        h('td', { class: 'small' }, fmtTime(d.lastUsed)), h('td', { class: 'small' }, fmtTime(d.expires)), h('td', null, b));
+    });
+    box.replaceChildren(head,
+      h('p', { class: 'small muted' }, `로그인할 때 「이 기기 신뢰」를 고른 브라우저입니다. ${r.days}일 동안 비밀번호만으로 들어오고, 비밀번호나 2단계 인증을 바꾸면 모두 풀립니다.`),
+      rows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'compact' },
+        h('thead', null, h('tr', null, ['기기', 'IP', '마지막 사용', '만료', ''].map((x) => h('th', { scope: 'col' }, x)))), h('tbody', null, rows)))
+        : h('p', { class: 'small muted' }, '신뢰하는 기기가 없습니다.'),
+      h('div', { class: 'row' }, all));
+  };
+  draw();
+  return box;
 }

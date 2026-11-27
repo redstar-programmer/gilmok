@@ -30,21 +30,22 @@ import (
 //   - at least one enabled account with the 「accounts」 permission always remains
 
 type Account struct {
-	Name        string    `json:"name"`
-	Display     string    `json:"display,omitempty"`
-	Role        string    `json:"role"`
-	Hash        string    `json:"hash"`                  // argon2id — never sent to the UI
-	TOTP        string    `json:"totp,omitempty"`        // base32 secret — never sent
-	TOTPLast    int64     `json:"totpLast,omitempty"`    // last accepted step — a code works once
-	TOTPPending string    `json:"totpPending,omitempty"` //
-	Recovery    []string  `json:"recovery,omitempty"`    // sha256 of unused recovery codes
-	Disabled    bool      `json:"disabled,omitempty"`
-	MustChange  bool      `json:"mustChange,omitempty"` // temporary password: change at next login
-	Require2FA  bool      `json:"require2fa,omitempty"` // an account manager requires TOTP for this account
-	Bootstrap   bool      `json:"bootstrap,omitempty"`  // the built-in admin/admin of a fresh install
-	Created     time.Time `json:"created"`
-	LastLogin   time.Time `json:"lastLogin,omitempty"`
-	PwChanged   time.Time `json:"pwChanged,omitempty"`
+	Name        string          `json:"name"`
+	Display     string          `json:"display,omitempty"`
+	Role        string          `json:"role"`
+	Hash        string          `json:"hash"`                  // argon2id — never sent to the UI
+	TOTP        string          `json:"totp,omitempty"`        // base32 secret — never sent
+	TOTPLast    int64           `json:"totpLast,omitempty"`    // last accepted step — a code works once
+	TOTPPending string          `json:"totpPending,omitempty"` //
+	Recovery    []string        `json:"recovery,omitempty"`    // sha256 of unused recovery codes
+	Disabled    bool            `json:"disabled,omitempty"`
+	MustChange  bool            `json:"mustChange,omitempty"` // temporary password: change at next login
+	Require2FA  bool            `json:"require2fa,omitempty"` // an account manager requires TOTP for this account
+	Bootstrap   bool            `json:"bootstrap,omitempty"`  // the built-in admin/admin of a fresh install
+	Created     time.Time       `json:"created"`
+	LastLogin   time.Time       `json:"lastLogin,omitempty"`
+	PwChanged   time.Time       `json:"pwChanged,omitempty"`
+	Trusted     []TrustedDevice `json:"trusted,omitempty"` // browsers that skip the second factor (trust.go) — never sent
 }
 
 type Role struct {
@@ -301,6 +302,7 @@ type accountView struct {
 	LastLogin  time.Time `json:"lastLogin"`
 	PwChanged  time.Time `json:"pwChanged"`
 	Sessions   int       `json:"sessions"`
+	Trusted    int       `json:"trusted"` // trusted devices (count)
 }
 
 func (a *Auth) viewOf(d *Data, acct *Account) accountView {
@@ -309,6 +311,7 @@ func (a *Auth) viewOf(d *Data, acct *Account) accountView {
 	if r := d.role(acct.Role); r != nil {
 		v.RoleName = r.Name
 	}
+	v.Trusted = len(pruneTrusted(acct.Trusted, credStamp(acct), time.Now()))
 	a.mu.Lock()
 	for _, s := range a.sessions {
 		if s.User == acct.Name {
@@ -459,7 +462,10 @@ func (a *Auth) checkSecondFactor(acct *Account, code string) (ok, usedRecovery b
 }
 
 func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
-	var in struct{ Name, Password, Code string }
+	var in struct {
+		Name, Password, Code string
+		Trust                bool // remember this browser: next time the password is enough
+	}
 	_ = readJSON(r, &in)
 	in.Name = strings.ToLower(strings.TrimSpace(in.Name))
 	if in.Name == "" {
@@ -480,12 +486,16 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 	} else {
 		VerifyPassword(dummyHash, in.Password) // same cost as a real check
 	}
+	var trusted *TrustedDevice
 	if pwOK && acct.TOTP != "" && strings.TrimSpace(in.Code) == "" {
-		writeJSON(w, 401, map[string]any{"error": "2단계 인증 코드를 입력하세요", "needCode": true})
-		return
+		trusted = a.trustedHere(r, acct)
+		if trusted == nil {
+			writeJSON(w, 401, map[string]any{"error": "2단계 인증 코드를 입력하세요", "needCode": true, "trustDays": trustDays(d.Settings)})
+			return
+		}
 	}
 	codeOK, usedRecovery := true, false
-	if pwOK && acct.TOTP != "" {
+	if pwOK && acct.TOTP != "" && trusted == nil {
 		codeOK, usedRecovery = a.checkSecondFactor(acct, in.Code)
 	}
 	if !pwOK || !codeOK {
@@ -515,10 +525,15 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 	a.noteOK(key)                                      // not globalKey: one valid login must not reset the counter for everyone else
 	if c, err := r.Cookie(sessionCookie); err == nil { // rotate
 		a.mu.Lock()
-		delete(a.sessions, c.Value)
+		delete(a.sessions, skey(c.Value))
 		a.mu.Unlock()
 	}
 	a.newSession(w, r, true, acct.Name)
+	if trusted != nil {
+		a.touchTrusted(acct.Name, trusted.ID, clientIP(r))
+	} else if in.Trust && acct.TOTP != "" {
+		a.trustDevice(w, r, acct)
+	}
 	_ = a.store.Update(func(x *Data) error {
 		if y := x.account(acct.Name); y != nil {
 			y.LastLogin = time.Now()
@@ -528,6 +543,10 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 	msg := "로그인"
 	if usedRecovery {
 		msg = "로그인 (복구 코드 사용 — 남은 코드 확인 필요)"
+	} else if trusted != nil {
+		msg = "로그인 (신뢰 기기 — 2단계 인증 생략: " + trusted.Label + ")"
+	} else if in.Trust && acct.TOTP != "" && trustDays(d.Settings) > 0 {
+		msg = "로그인 (이 기기를 신뢰 기기로 등록: " + uaLabel(r.UserAgent()) + ")"
 	}
 	a.auditAs(r, acct.Name+" ("+viaText(r)+")", "audit", map[bool]string{true: "warn", false: "info"}[usedRecovery], "auth.login", acct.Name, msg, map[string]any{"ua": truncate(r.UserAgent(), 160), "totp": acct.TOTP != ""})
 	writeJSON(w, 200, map[string]any{"ok": true, "usedRecovery": usedRecovery})
@@ -537,10 +556,11 @@ func (a *Auth) logout(w http.ResponseWriter, r *http.Request) {
 	user := ""
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		a.mu.Lock()
-		if s := a.sessions[c.Value]; s != nil {
+		if s := a.sessions[skey(c.Value)]; s != nil {
 			user = s.User
 		}
-		delete(a.sessions, c.Value)
+		delete(a.sessions, skey(c.Value))
+		a.saveSessionsLocked()
 		a.mu.Unlock()
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
@@ -599,7 +619,8 @@ func (a *Auth) stepFail(r *http.Request, name string) {
 	if d := a.noteFail("step|" + name); d > 0 {
 		if c, err := r.Cookie(sessionCookie); err == nil {
 			a.mu.Lock()
-			delete(a.sessions, c.Value)
+			delete(a.sessions, skey(c.Value))
+			a.saveSessionsLocked()
 			a.mu.Unlock()
 		}
 		a.audit(r, "security", "critical", "auth.step.lock", name, fmt.Sprintf("로그인 상태에서 비밀번호를 연속으로 틀려 세션을 끝내고 %d분 잠갔습니다", int(d.Minutes())), nil)
@@ -616,6 +637,7 @@ func (a *Auth) revokeUser(name string, keep *Session) int {
 			n++
 		}
 	}
+	a.saveSessionsLocked()
 	a.mu.Unlock()
 	return n
 }
@@ -723,6 +745,7 @@ func (a *Auth) revokeSession(w http.ResponseWriter, r *http.Request) {
 		delete(a.sessions, k)
 		n++
 	}
+	a.saveSessionsLocked()
 	a.mu.Unlock()
 	if denied {
 		fail(w, 403, errors.New("다른 사람의 세션은 「계정·접근 보안」 권한이 있어야 끊을 수 있습니다"))

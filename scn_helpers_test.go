@@ -192,7 +192,7 @@ func (f *fullApp) user(t *testing.T, admin *client, name, role string) *client {
 // expire the recent-password window of a client's session.
 func (f *fullApp) staleReauth(c *client) {
 	f.app.auth.mu.Lock()
-	if s := f.app.auth.sessions[c.cookie]; s != nil {
+	if s := f.app.auth.sessions[skey(c.cookie)]; s != nil {
 		s.Reauth = time.Time{}
 	}
 	f.app.auth.mu.Unlock()
@@ -201,7 +201,7 @@ func (f *fullApp) staleReauth(c *client) {
 func (f *fullApp) session(c *client) *Session {
 	f.app.auth.mu.Lock()
 	defer f.app.auth.mu.Unlock()
-	return f.app.auth.sessions[c.cookie]
+	return f.app.auth.sessions[skey(c.cookie)]
 }
 
 func (f *fullApp) set(fn func(d *Data)) {

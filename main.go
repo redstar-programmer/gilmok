@@ -27,7 +27,7 @@ import (
 //go:embed web
 var webFS embed.FS
 
-var version = "0.1.23"
+var version = "0.1.24"
 
 func main() {
 	dataDir := env("GM_DATA", "/data")
@@ -68,6 +68,9 @@ func main() {
 	go func() {
 		<-sig
 		app.saveMetrics()
+		if app.auth != nil {
+			app.auth.saveSessions()
+		}
 		app.logEvent("system", "info", "gilmok.stop", "", "길목 종료", nil)
 		time.Sleep(1500 * time.Millisecond) // let the log writer flush
 		os.Exit(0)
@@ -77,6 +80,7 @@ func main() {
 	go app.netmapLoop(context.Background())
 
 	handler := app.handler()
+	go app.auth.sessionSaver()
 
 	addr := env("GM_LISTEN", ":8080")
 	log.Printf("Gilmok %s listening on %s", version, addr)
@@ -166,6 +170,9 @@ func (app *App) handler() http.Handler {
 	api.HandleFunc("POST /api/auth/reauth", auth.reauth)
 	api.HandleFunc("GET /api/auth/sessions", auth.listSessions)
 	api.HandleFunc("DELETE /api/auth/sessions/{id}", S(auth.revokeSession))
+	api.HandleFunc("GET /api/auth/devices", auth.listDevices)
+	api.HandleFunc("DELETE /api/auth/devices/{id}", auth.revokeDevice)
+	api.HandleFunc("DELETE /api/accounts/{name}/devices", S(auth.revokeAccountDevices))
 	api.HandleFunc("POST /api/auth/totp/begin", S(auth.totpBegin))
 	api.HandleFunc("POST /api/auth/totp/enable", S(auth.totpEnable))
 	api.HandleFunc("POST /api/auth/totp/disable", S(auth.totpDisable))
@@ -1156,6 +1163,7 @@ func normalizeSettings(p *Settings) error {
 	clamp(&in.SecIdleMin, 5, 1440, 30)
 	clamp(&in.SecAbsHours, 1, 720, 12)
 	clamp(&in.SecReauthMin, 1, 120, 10)
+	clamp(&in.SecTrustDays, 1, 90, 30)
 	if !in.SecAllowDirect && !in.SecAllowProxy {
 		return errors.New("직접 접속과 Caddy 경유 접속을 모두 끌 수는 없습니다 (길목에 들어올 길이 없어집니다)")
 	}

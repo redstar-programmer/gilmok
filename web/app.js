@@ -565,7 +565,7 @@ function initAuthForm() {
     const btn = $('#auth-submit');
     try {
       const name = $('#auth-name').value.trim().toLowerCase();
-      const res = await busy(btn, () => api('POST', authSetupMode ? '/api/auth/setup' : '/api/auth/login', { name, password: pw, code: $('#auth-code').value.trim() }));
+      const res = await busy(btn, () => api('POST', authSetupMode ? '/api/auth/setup' : '/api/auth/login', { name, password: pw, code: $('#auth-code').value.trim(), trust: !$('#auth-trust-wrap').hidden && $('#auth-trust').checked }));
       localStorage.setItem('gm.user', name);
       $('#auth-pw').value = '';
       $('#auth-pw2').value = '';
@@ -576,6 +576,10 @@ function initAuthForm() {
       showErr(ex.message);
       if (ex.data && ex.data.needCode) {
         $('#auth-code-wrap').hidden = false;
+        // a trusted device skips the code next time (the password is still asked)
+        const days = ex.data.trustDays || 0;
+        $('#auth-trust-wrap').hidden = !days;
+        $('#auth-trust-text').textContent = T(`이 기기 신뢰 — ${days}일 동안 비밀번호만 (공용 PC에서는 켜지 마세요)`);
         $('#auth-code').focus();
       } else if (!$('#auth-code-wrap').hidden && /코드/.test(ex.message)) {
         $('#auth-code').select();

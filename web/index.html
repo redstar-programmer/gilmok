@@ -55,6 +55,7 @@
     <div class="field" id="auth-code-wrap" hidden>
       <label for="auth-code">2단계 인증 코드</label>
       <input id="auth-code" type="text" autocomplete="one-time-code" maxlength="11" placeholder="앱의 6자리 코드 (또는 복구 코드)">
+      <label class="radio-inline auth-trust" id="auth-trust-wrap" hidden><input id="auth-trust" type="checkbox"> <span id="auth-trust-text">이 기기 신뢰 — 다음부터 비밀번호만</span></label>
     </div>
     <p id="auth-err" class="form-error" role="alert" hidden></p>
     <button id="auth-submit" class="btn primary block" type="submit">로그인</button>

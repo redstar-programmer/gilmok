@@ -89,7 +89,7 @@ func TestScnAuthLogin(t *testing.T) {
 	}
 	// next valid step: wait is not needed — reuse a fresh session from the admin flow instead
 	f.app.auth.mu.Lock()
-	_, stillThere := f.app.auth.sessions[old]
+	_, stillThere := f.app.auth.sessions[skey(old)]
 	f.app.auth.mu.Unlock()
 	if !stillThere {
 		t.Fatal("failed login must not drop the session")
@@ -112,7 +112,7 @@ func TestScnAuthSessions(t *testing.T) {
 		t.Fatal("AUTH-17: X-Forwarded-Proto https → Secure")
 	}
 	f.app.auth.mu.Lock()
-	_, ok := f.app.auth.sessions[old]
+	_, ok := f.app.auth.sessions[skey(old)]
 	f.app.auth.mu.Unlock()
 	if ok {
 		t.Fatal("AUTH-18: old token still valid")

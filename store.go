@@ -192,6 +192,8 @@ type Settings struct {
 	SecIdleMin     int    `json:"secIdleMin"`     // idle session timeout
 	SecAbsHours    int    `json:"secAbsHours"`    // absolute session lifetime
 	SecReauthMin   int    `json:"secReauthMin"`   // sensitive actions need a password within this window
+	SecTrustOff    bool   `json:"secTrustOff"`    // no trusted devices (every login asks for the second factor)
+	SecTrustDays   int    `json:"secTrustDays"`   // how long a trusted device skips the second factor (0 = 30, max 90)
 	SecAllowDirect bool   `json:"secAllowDirect"` // allow the host-published port (127.0.0.1:8088)
 	SecAllowProxy  bool   `json:"secAllowProxy"`  // allow access through Caddy (with the proxy secret)
 	SecRequireSSO  bool   `json:"secRequireSso"`  // via Caddy: an Authelia user (Remote-User) is required

@@ -22,7 +22,8 @@ function securityStep() {
     secRow(set.secRequireSso, 'Authelia 로그인 필수 (Caddy 경유 시)', set.secRequireSso ? `Remote-User가 있어야 들어옵니다${set.secSsoGroups ? ` · 그룹 ${set.secSsoGroups}` : ''}${selfSvc && !(selfSvc.authelia && selfSvc.authelia.enabled) ? ' — ⚠ 길목 사이트에 Authelia가 꺼져 있어 원격 접속이 막힙니다' : ''}` : '꺼짐 — Caddy를 거친 사람은 길목 계정 로그인만으로 들어옵니다'),
     secRow(!!sec.totp, '2단계 인증 (TOTP)', `계정마다 선택 (내 계정: ${sec.totp ? '켜짐' : '꺼짐'}) — 각자 「내 계정」에서 켜고, 관리자는 「계정 관리」에서 계정별·일괄로 요구할 수 있습니다`),
     secRow(true, '계정·권한', '사람마다 계정(아이디·비밀번호·2단계 인증)과 역할이 따로 있고, 작업은 역할의 권한 안에서만 됩니다. 모든 변경은 누가 했는지 감사 로그에 남습니다'),
-    secRow(true, '세션', `유휴 ${set.secIdleMin}분 · 최대 ${set.secAbsHours}시간 후 만료, HttpOnly + SameSite=Strict 쿠키`),
+    secRow(true, '세션', `유휴 ${set.secIdleMin}분 · 최대 ${set.secAbsHours}시간 후 만료, HttpOnly + SameSite=Strict 쿠키 — 길목을 재시작·업데이트해도 유지`),
+    secRow(!set.secTrustOff, '신뢰 기기', set.secTrustOff ? '꺼짐 — 로그인할 때마다 2단계 인증 코드를 묻습니다' : `「이 기기 신뢰」를 고른 브라우저는 ${set.secTrustDays || 30}일 동안 2단계 인증 생략 (비밀번호는 매번)`),
     secRow(true, '중요 작업 재인증', `적용·사용자·로그 삭제·보안 설정 변경 등은 ${set.secReauthMin}분 안에 비밀번호를 다시 확인한 경우에만`),
     secRow(true, '무차별 대입 방어', '5회 실패마다 잠금 (5분 → 10분 → … 최대 1시간), 실패는 보안 로그에 기록'));
 
@@ -61,6 +62,8 @@ function securityStep() {
     { key: 'secIdleMin', type: 'number', label: '유휴 만료 (분)', attrs: { min: '5', max: '1440' } },
     { key: 'secAbsHours', type: 'number', label: '최대 세션 길이 (시간)', attrs: { min: '1', max: '720' } },
     { key: 'secReauthMin', type: 'number', label: '재인증 유효 시간 (분)', attrs: { min: '1', max: '120' } },
+    { key: 'secTrustOff', type: 'switch', label: '신뢰 기기 끄기', hint: '켜면 로그인할 때마다 2단계 인증 코드를 묻습니다 (이미 신뢰한 기기도 무시)' },
+    { key: 'secTrustDays', type: 'select', num: true, label: '신뢰 기기 유지 기간', options: [['7', '7일'], ['14', '14일'], ['30', '30일'], ['60', '60일'], ['90', '90일']], hint: '「이 기기 신뢰」를 고른 브라우저는 이 기간 동안 비밀번호만으로 로그인합니다. 비밀번호·2단계 인증을 바꾸면 모두 풀립니다' },
   ].filter((f) => f && (use('authelia') || !['secRequireSso', 'secSsoGroups'].includes(f.key)) && (use('caddy') || !['secAllowProxy', 'secSelfService', 'secRequireSso', 'secSsoGroups'].includes(f.key))), {
     validate: (p) => (p.secAllowDirect === false && p.secAllowProxy === false ? '직접 접속과 Caddy 경유 접속을 모두 끌 수는 없습니다' : ''),
     onSaved: () => renderPanel(),

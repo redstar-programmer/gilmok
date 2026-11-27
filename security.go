@@ -58,7 +58,7 @@ type Auth struct {
 	app      *App
 	store    *Store
 	mu       sync.Mutex
-	sessions map[string]*Session // token → session
+	sessions map[string]*Session // skey(token) → session (saved to sessions.json)
 	fails    map[string]*failState
 	gwMu     sync.Mutex
 	gateways []net.IP
@@ -74,7 +74,9 @@ type failState struct {
 }
 
 func newAuth(app *App) *Auth {
-	return &Auth{app: app, store: app.store, sessions: map[string]*Session{}, fails: map[string]*failState{}, denyLog: map[string]time.Time{}}
+	a := &Auth{app: app, store: app.store, sessions: map[string]*Session{}, fails: map[string]*failState{}, denyLog: map[string]time.Time{}}
+	a.loadSessions() // still logged in after an update / restart
+	return a
 }
 
 // clientIP: who is on the other end, for logs and per-client lockout. Through Gilmok's own Caddy
@@ -297,13 +299,15 @@ func (a *Auth) session(r *http.Request) *Session {
 	idle, abs, _ := a.policy()
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	s := a.sessions[c.Value]
+	k := skey(c.Value)
+	s := a.sessions[k]
 	if s == nil {
 		return nil
 	}
 	now := time.Now()
 	if now.Sub(s.LastSeen) > idle || now.Sub(s.Created) > abs {
-		delete(a.sessions, c.Value)
+		delete(a.sessions, k)
+		a.saveSessionsLocked()
 		return nil
 	}
 	s.LastSeen = now
@@ -323,7 +327,8 @@ func (a *Auth) newSession(w http.ResponseWriter, r *http.Request, fresh bool, us
 		s.Reauth = now
 	}
 	a.mu.Lock()
-	a.sessions[tok] = s
+	a.sessions[skey(tok)] = s
+	a.saveSessionsLocked()
 	a.mu.Unlock()
 	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: tok, Path: "/", HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode})

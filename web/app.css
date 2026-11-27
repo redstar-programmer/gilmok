@@ -1488,3 +1488,5 @@ html:not([lang="ko"]) .brand-en { display: none; }
 @media (max-width: 700px) { .nm-side { bottom: auto; max-height: 55%; } .nm-mini { display: none; } }
 .nm-legend .l-ok, .nm-legend .l-down { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--ok); }
 .nm-legend .l-down { background: var(--danger); }
+
+.trusted-box td .badge { margin-left: 6px; }
