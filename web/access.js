@@ -63,7 +63,7 @@ function securityStep() {
     { key: 'secAbsHours', type: 'number', label: '최대 세션 길이 (시간)', attrs: { min: '1', max: '720' } },
     { key: 'secReauthMin', type: 'number', label: '재인증 유효 시간 (분)', attrs: { min: '1', max: '120' } },
     { key: 'secTrustOff', type: 'switch', label: '신뢰 기기 끄기', hint: '켜면 로그인할 때마다 2단계 인증 코드를 묻습니다 (이미 신뢰한 기기도 무시)' },
-    { key: 'secTrustDays', type: 'select', num: true, label: '신뢰 기기 유지 기간', options: [['7', '7일'], ['14', '14일'], ['30', '30일'], ['60', '60일'], ['90', '90일']], hint: '「이 기기 신뢰」를 고른 브라우저는 이 기간 동안 비밀번호만으로 로그인합니다. 비밀번호·2단계 인증을 바꾸면 모두 풀립니다' },
+    { key: 'secTrustDays', type: 'select', num: true, label: '신뢰 기기 유지 기간', options: [['0', '30일 (기본)'], ['7', '7일'], ['14', '14일'], ['60', '60일'], ['90', '90일']], hint: '「이 기기 신뢰」를 고른 브라우저는 이 기간 동안 비밀번호만으로 로그인합니다. 비밀번호·2단계 인증을 바꾸면 모두 풀립니다' },
   ].filter((f) => f && (use('authelia') || !['secRequireSso', 'secSsoGroups'].includes(f.key)) && (use('caddy') || !['secAllowProxy', 'secSelfService', 'secRequireSso', 'secSsoGroups'].includes(f.key))), {
     validate: (p) => (p.secAllowDirect === false && p.secAllowProxy === false ? '직접 접속과 Caddy 경유 접속을 모두 끌 수는 없습니다' : ''),
     onSaved: () => renderPanel(),

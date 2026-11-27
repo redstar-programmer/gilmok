@@ -165,8 +165,18 @@ func TestScnDashboard(t *testing.T) {
 	}
 	// DASH-04 / DASH-05: one call answers every widget; a broken one does not break the rest
 	now := time.Now().UnixMilli()
+	for i := 0; i < 50; i++ { // like the log stream: memory and the log database
+		r := ReqRec{T: now - int64(i*1000), Host: "a.example.com", Status: []int{200, 404, 503}[i%3], Ms: float64(i * 10)}
+		f.app.mon.addReq(r)
+		f.app.ldb.Req(r)
+	}
 	for i := 0; i < 50; i++ {
-		f.app.mon.addReq(ReqRec{T: now - int64(i*1000), Host: "a.example.com", Status: []int{200, 404, 503}[i%3], Ms: float64(i * 10)})
+		var c int
+		_ = f.app.ldb.r.QueryRow(`SELECT COUNT(*) FROM requests`).Scan(&c)
+		if c == 50 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	b, _ = json.Marshal(map[string]any{"widgets": []Widget{
 		{ID: "s", Type: "stat", Metric: "requests", Range: "15m"}, {ID: "x", Type: "pie"},

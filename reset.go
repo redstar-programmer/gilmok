@@ -106,7 +106,7 @@ func (a *App) resetRuntime(keepBackup string) error {
 	if a.mon != nil {
 		m := a.mon
 		m.mu.Lock()
-		m.reqs, m.pos = nil, 0
+		m.reqs, m.pos, m.ringStart = nil, 0, time.Now().UnixMilli()
 		m.fine, m.coarse = map[int64]*Slot{}, map[int64]*Slot{}
 		m.waf = nil
 		m.lastTs = time.Now().UnixMilli() // a reconnecting log stream must not replay old lines

@@ -600,7 +600,19 @@ func (m *Monitor) ringSpan() time.Duration {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(m.reqs) < reqRingCap {
-		return 365 * 24 * time.Hour // not full yet → complete since start
+		// not full yet → complete since it began collecting — which is this process's start, not
+		// forever: after a restart the per-minute buckets (metrics.json) reach back further than
+		// the ring, and the request-level panels must then read the log database instead
+		// (a reconnecting log stream replays lines since the last one counted, so the oldest entry
+		// can be older than the process — the ring is complete from whichever is earlier)
+		if m.ringStart == 0 {
+			return 365 * 24 * time.Hour
+		}
+		start := m.ringStart
+		if len(m.reqs) > 0 && m.reqs[0].T < start {
+			start = m.reqs[0].T
+		}
+		return time.Since(time.UnixMilli(start))
 	}
 	return time.Since(time.UnixMilli(m.reqs[m.pos].T))
 }
@@ -849,12 +861,28 @@ func (a *App) postDashData(w http.ResponseWriter, r *http.Request) {
 			data[wd.ID] = a.statData(wd)
 		case "series":
 			data[wd.ID] = a.seriesData(wd)
-		case "scatter":
-			data[wd.ID] = a.scatterData(wd)
-		case "top":
-			data[wd.ID] = a.topData(wd)
-		case "map":
-			data[wd.ID] = a.mapData(wd)
+		case "scatter", "top", "map":
+			// request-level panels: from memory when the ring covers the range, else from the log
+			// database (after a restart the ring starts empty while the charts' buckets do not)
+			if a.ldb != nil && a.mon.ringSpan() < wd.dur() {
+				switch wd.Type {
+				case "scatter":
+					data[wd.ID] = a.dbScatter(ctx, wd, end)
+				case "top":
+					data[wd.ID] = a.dbTop(ctx, wd, end)
+				default:
+					data[wd.ID] = a.dbMap(ctx, wd, end)
+				}
+				continue
+			}
+			switch wd.Type {
+			case "scatter":
+				data[wd.ID] = a.scatterData(wd)
+			case "top":
+				data[wd.ID] = a.topData(wd)
+			default:
+				data[wd.ID] = a.mapData(wd)
+			}
 		case "health":
 			data[wd.ID] = a.healthData()
 		case "containers":

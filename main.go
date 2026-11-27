@@ -27,7 +27,7 @@ import (
 //go:embed web
 var webFS embed.FS
 
-var version = "0.1.25"
+var version = "0.1.26"
 
 func main() {
 	dataDir := env("GM_DATA", "/data")
@@ -1163,7 +1163,9 @@ func normalizeSettings(p *Settings) error {
 	clamp(&in.SecIdleMin, 5, 1440, 30)
 	clamp(&in.SecAbsHours, 1, 720, 12)
 	clamp(&in.SecReauthMin, 1, 120, 10)
-	clamp(&in.SecTrustDays, 1, 90, 30)
+	// 0 = the default (30 days, see trustDays) — kept as 0 so older data does not look like a
+	// security setting someone changed (that would demand the 「계정·접근 보안」 permission)
+	in.SecTrustDays = min(max(in.SecTrustDays, 0), 90)
 	if !in.SecAllowDirect && !in.SecAllowProxy {
 		return errors.New("직접 접속과 Caddy 경유 접속을 모두 끌 수는 없습니다 (길목에 들어올 길이 없어집니다)")
 	}

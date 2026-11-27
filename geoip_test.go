@@ -185,6 +185,14 @@ func TestGeoMapWidget(t *testing.T) {
 			t.Errorf("GEO-04 %s via: %s", tag, b)
 		}
 	}
+	for i := 0; i < 50; i++ { // the live map reads the log database while the ring is younger than the range
+		var c int
+		_ = f.app.ldb.r.QueryRow(`SELECT COUNT(*) FROM requests`).Scan(&c)
+		if c == len(recs) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	b, _ := json.Marshal(map[string]any{"widgets": []Widget{{ID: "m", Type: "map"}}, "range": "1h"})
 	m := boss.must(200, "POST", "/api/dash/data", string(b))
 	check("live", m["data"].(map[string]any)["m"].(map[string]any))

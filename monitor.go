@@ -191,6 +191,7 @@ type CertInfo struct {
 type Monitor struct {
 	mu        sync.Mutex
 	reqs      []ReqRec
+	ringStart int64 // unix ms the ring began collecting (process start / reset) — it holds nothing older
 	pos       int
 	fine      map[int64]*Slot
 	coarse    map[int64]*Slot
@@ -217,7 +218,7 @@ type Monitor struct {
 }
 
 func newMonitor() *Monitor {
-	return &Monitor{fine: map[int64]*Slot{}, coarse: map[int64]*Slot{}, ctr: map[string][]CtrPoint{}, health: map[string]*HealthState{}}
+	return &Monitor{fine: map[int64]*Slot{}, coarse: map[int64]*Slot{}, ctr: map[string][]CtrPoint{}, health: map[string]*HealthState{}, ringStart: time.Now().UnixMilli()}
 }
 
 func addSlot(m map[int64]*Slot, key int64, r ReqRec) {

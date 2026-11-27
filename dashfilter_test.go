@@ -153,3 +153,47 @@ func TestDashGridLayout(t *testing.T) {
 		}
 	}
 }
+
+// DASH-15: after a restart the in-memory ring holds only the newest requests while the charts'
+// buckets (metrics.json) reach back further — the request-level panels (scatter, ranking, map)
+// then read the log database, so they agree with the charts.
+func TestDashRingAfterRestart(t *testing.T) {
+	f := newFullApp(t)
+	boss := f.admin(t)
+	now := time.Now().UnixMilli()
+	for i := 0; i < 30; i++ { // before the restart: in the database only
+		f.app.ldb.Req(ReqRec{T: now - int64(10+i)*60_000, Host: "a.example.com", Method: "GET", URI: "/", Status: 200, Ms: 12, CC: "KR", Via: "cf", IP: "203.0.113.9"})
+	}
+	f.app.mon = newMonitor() // the restart: an empty ring that started now
+	r := ReqRec{T: now, Host: "b.example.com", Method: "GET", URI: "/x", Status: 200, Ms: 5}
+	f.app.mon.addReq(r)
+	f.app.ldb.Req(r)
+	for i := 0; i < 50; i++ { // written also counts audit events: wait for the rows themselves
+		var c int
+		_ = f.app.ldb.r.QueryRow(`SELECT COUNT(*) FROM requests`).Scan(&c)
+		if c == 31 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if s := f.app.mon.ringSpan(); s > time.Minute {
+		t.Fatalf("DASH-15 ring span right after the restart: %v", s)
+	}
+	b, _ := json.Marshal(map[string]any{"range": "1h", "widgets": []Widget{{ID: "c", Type: "scatter"}, {ID: "t", Type: "top", Dim: "host", Limit: 5}, {ID: "m", Type: "map"}}})
+	d := boss.must(200, "POST", "/api/dash/data", string(b))["data"].(map[string]any)
+	if n := len(d["c"].(map[string]any)["points"].([]any)); n != 31 {
+		t.Errorf("DASH-15 scatter after a restart: %d points (want 31 from the database)", n)
+	}
+	if rows := d["t"].(map[string]any)["rows"].([]any); len(rows) != 2 {
+		t.Errorf("DASH-15 top after a restart: %v", rows)
+	}
+	if cs := d["m"].(map[string]any)["countries"].([]any); len(cs) != 1 {
+		t.Errorf("DASH-15 map after a restart: %v", cs)
+	}
+	// a ring that has been collecting long enough is used as before (no database read)
+	f.app.mon.ringStart = now - 2*3600_000
+	d = boss.must(200, "POST", "/api/dash/data", string(b))["data"].(map[string]any)
+	if n := len(d["c"].(map[string]any)["points"].([]any)); n != 1 {
+		t.Errorf("DASH-15 ring covering the range: %d points (want the ring's 1)", n)
+	}
+}

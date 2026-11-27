@@ -131,7 +131,7 @@
   "2분": "2 min",
   "3 — 매우 엄격": "3 — very strict",
   "301·302 다른 주소로 이동(예: 로그인 화면) · 304 바뀐 것 없음(캐시 사용)": "301 · 302 moved to another address (e.g. the login page) · 304 not modified (cache used)",
-  "30일": "30 days",
+  "30일 (기본)": "30 days (default)",
   "30초": "30s",
   "4 — 최고 (오탐 많음)": "4 — maximum (many false positives)",
   "401 로그인 필요 · 403 거부(기본 차단·WAF·국가 차단) · 404 없는 주소 · 429 너무 많은 요청": "401 login required · 403 refused (basic block, WAF, country block) · 404 no such address · 429 too many requests",
