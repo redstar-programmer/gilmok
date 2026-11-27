@@ -27,7 +27,7 @@ import (
 //go:embed web
 var webFS embed.FS
 
-var version = "0.1.24"
+var version = "0.1.25"
 
 func main() {
 	dataDir := env("GM_DATA", "/data")

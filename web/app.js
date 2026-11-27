@@ -513,6 +513,10 @@ async function refreshState() {
 let authSetupMode = false;
 
 async function showAuth(setup) {
+  // background refreshes (dashboard, health, network map …) keep getting 401 after a logout or an
+  // expired session: the login form already on screen must keep what the user is typing
+  if (setup === undefined && !$('#auth').hidden && $('#app').hidden && !$('#auth-form').hidden) return;
+  if (typeof DASH !== 'undefined') { DASH.gen++; clearTimeout(DASH.timer); } // stop the dashboard's polling
   $('#app').hidden = true;
   for (const d of [...dialogStack]) d.close(true);
   let firstRun = false;
